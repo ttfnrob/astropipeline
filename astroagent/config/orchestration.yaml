@@ -1,0 +1,299 @@
+# Orchestration Configuration for AstroAgent Pipeline
+# Defines state machine workflow, routing rules, and transition logic
+
+# ============================================================================
+# State Machine Definition
+# ============================================================================
+
+states:
+  # Initial state - system entry point
+  start:
+    name: "Pipeline Start"
+    description: "Entry point for new research cycles"
+    agent: null
+    transitions: ["hypothesis_generation"]
+    
+  # Hypothesis generation phase
+  hypothesis_generation:
+    name: "Hypothesis Generation"
+    description: "Generate novel research hypotheses"
+    agent: "hypothesis_maker"
+    input_requirements: ["domain_tags", "recency_horizon"]
+    output_registry: "ideas_register"
+    transitions: ["initial_review"]
+    retry_on_failure: true
+    max_retries: 2
+    
+  # Initial review of hypotheses
+  initial_review:
+    name: "Initial Review"
+    description: "Score and filter generated hypotheses"
+    agent: "reviewer"
+    input_registry: "ideas_register"
+    input_filter: {"status": "Proposed"}
+    output_registry: "ideas_register"
+    transitions: ["hypothesis_generation", "experiment_design", "archive"]
+    batch_processing: true
+    
+  # Experiment design phase
+  experiment_design:
+    name: "Experiment Design"
+    description: "Create detailed experimental plans"
+    agent: "experiment_designer"
+    input_registry: "ideas_register"
+    input_filter: {"status": "Approved"}
+    output_registry: "project_index"
+    transitions: ["ready_check", "initial_review"]
+    create_project_folder: true
+    
+  # Readiness validation
+  ready_check:
+    name: "Ready for Execution Check"
+    description: "Validate experiment readiness"
+    agent: null  # automated checklist validation
+    input_registry: "project_index"
+    input_filter: {"maturity": "Preparing"}
+    output_registry: "project_index"
+    transitions: ["experiment_execution", "experiment_design"]
+    validation_required: true
+    
+  # Experiment execution
+  experiment_execution:
+    name: "Experiment Execution"
+    description: "Run the planned experiments"
+    agent: "experimenter"
+    input_registry: "project_index"
+    input_filter: {"maturity": "Ready"}
+    output_registry: "project_index"
+    transitions: ["peer_review", "experiment_design"]
+    timeout_hours: 24
+    
+  # Peer review of results
+  peer_review:
+    name: "Peer Review"
+    description: "Review experimental results"
+    agent: "peer_reviewer"
+    input_registry: "project_index"
+    input_filter: {"maturity": "Complete"}
+    transitions: ["report_generation", "experiment_execution", "archive"]
+    human_approval_required: true
+    
+  # Final report generation
+  report_generation:
+    name: "Report Generation"
+    description: "Generate final research report"
+    agent: "reporter"
+    transitions: ["library", "peer_review"]
+    
+  # Completed work storage
+  library:
+    name: "Library"
+    description: "Archive completed research"
+    agent: null
+    output_registry: "completed_index"
+    transitions: []  # terminal state
+    final_state: true
+    
+  # Rejected/archived work
+  archive:
+    name: "Archive"
+    description: "Store rejected or superseded work"
+    agent: null
+    transitions: []  # terminal state
+    final_state: true
+
+# ============================================================================
+# Transition Rules and Routing Logic
+# ============================================================================
+
+routing_rules:
+  # From hypothesis generation
+  hypothesis_generation_to_initial_review:
+    condition: "always"
+    action: "transition"
+    target: "initial_review"
+    
+  # From initial review  
+  initial_review_to_hypothesis_generation:
+    condition: "status == 'Needs Revision' and revision_count < 3"
+    action: "transition"
+    target: "hypothesis_generation"
+    context: "revision"
+    
+  initial_review_to_experiment_design:
+    condition: "status == 'Approved'"
+    action: "transition"
+    target: "experiment_design"
+    
+  initial_review_to_archive:
+    condition: "status == 'Rejected' or (status == 'Needs Revision' and revision_count >= 3)"
+    action: "transition"
+    target: "archive"
+    
+  # From experiment design
+  experiment_design_to_ready_check:
+    condition: "plan_complete == true"
+    action: "transition"
+    target: "ready_check"
+    
+  experiment_design_to_initial_review:
+    condition: "needs_hypothesis_revision == true"
+    action: "transition"
+    target: "initial_review"
+    context: "design_feedback"
+    
+  # From ready check
+  ready_check_to_experiment_execution:
+    condition: "all_checks_passed == true"
+    action: "transition"
+    target: "experiment_execution"
+    
+  ready_check_to_experiment_design:
+    condition: "any_check_failed == true"
+    action: "transition"
+    target: "experiment_design"
+    context: "failed_checks"
+    
+  # From experiment execution
+  experiment_execution_to_peer_review:
+    condition: "execution_complete == true and no_critical_errors == true"
+    action: "transition"
+    target: "peer_review"
+    
+  experiment_execution_to_experiment_design:
+    condition: "critical_error == true or data_unavailable == true"
+    action: "transition"
+    target: "experiment_design"
+    context: "execution_failure"
+    
+  # From peer review
+  peer_review_to_report_generation:
+    condition: "review_status == 'Approved'"
+    action: "transition"
+    target: "report_generation"
+    
+  peer_review_to_experiment_execution:
+    condition: "review_status == 'Changes Requested'"
+    action: "transition"
+    target: "experiment_execution"
+    context: "peer_feedback"
+    
+  peer_review_to_archive:
+    condition: "review_status == 'Rejected'"
+    action: "transition"
+    target: "archive"
+    
+  # From report generation
+  report_generation_to_library:
+    condition: "report_complete == true"
+    action: "transition"
+    target: "library"
+    
+  report_generation_to_peer_review:
+    condition: "report_issues == true"
+    action: "transition"
+    target: "peer_review"
+    context: "report_revision"
+
+# ============================================================================
+# State Machine Configuration
+# ============================================================================
+
+orchestration:
+  engine: "langgraph"  # or "prefect", "crewai"
+  checkpointing: true
+  persistence: true
+  
+  # Execution settings
+  max_concurrent_states: 3
+  state_timeout_minutes: 120
+  retry_policy:
+    max_attempts: 3
+    backoff_factor: 1.5
+    jitter: true
+    
+  # Human-in-the-loop settings
+  human_approval_states: ["ready_check", "peer_review"]
+  approval_timeout_hours: 48
+  
+  # Monitoring and logging
+  log_state_transitions: true
+  log_agent_outputs: true
+  log_registry_updates: true
+  
+  # Notification settings (optional)
+  notifications:
+    enabled: false
+    webhook_url: ""
+    notify_on: ["state_failure", "human_approval_needed", "pipeline_complete"]
+
+# ============================================================================
+# Registry Update Patterns
+# ============================================================================
+
+registry_updates:
+  ideas_register:
+    on_entry:
+      hypothesis_generation: ["status: 'Proposed'", "created_at: timestamp"]
+      initial_review: ["status: 'Under Review'", "updated_at: timestamp"]
+    on_success:
+      initial_review: ["status: decision", "reviewer_notes: feedback", "updated_at: timestamp"]
+    on_failure:
+      hypothesis_generation: ["status: 'Generation Failed'"]
+      initial_review: ["status: 'Review Failed'"]
+      
+  project_index:
+    on_entry:
+      experiment_design: ["maturity: 'Preparing'", "path: project_path"]
+      ready_check: ["ready_checklist_status: 'Validating'"]
+      experiment_execution: ["maturity: 'Running'", "execution_start: timestamp"]
+    on_success:
+      experiment_design: ["maturity: 'Prepared'", "analysis_plan_preregistered: true"]
+      ready_check: ["ready_checklist_passed: true", "maturity: 'Ready'"]
+      experiment_execution: ["maturity: 'Complete'", "execution_end: timestamp"]
+    on_failure:
+      ready_check: ["ready_checklist_passed: false", "maturity: 'Preparing'"]
+      experiment_execution: ["maturity: 'Failed'"]
+      
+  completed_index:
+    on_entry:
+      library: ["moved_to_library_at: timestamp", "confidence: agent_confidence"]
+
+# ============================================================================
+# Error Handling and Recovery
+# ============================================================================
+
+error_handling:
+  # Automatic recovery strategies
+  network_timeout: "retry_with_backoff"
+  api_rate_limit: "exponential_backoff"
+  data_unavailable: "transition_to_design"
+  validation_failure: "transition_to_previous"
+  
+  # Manual intervention required
+  agent_hallucination: "human_review"
+  data_corruption: "human_review" 
+  ethical_concerns: "human_review"
+  
+  # Error escalation
+  max_auto_retries: 3
+  escalate_after_minutes: 60
+  alert_contacts: []  # email addresses for critical failures
+
+# ============================================================================
+# Batch Processing Configuration  
+# ============================================================================
+
+batch_processing:
+  initial_review:
+    batch_size: 10
+    parallel_reviews: true
+    max_parallel: 3
+    
+  experiment_execution:
+    batch_size: 1  # execute one at a time
+    parallel_execution: false
+    
+  report_generation:
+    batch_size: 5
+    parallel_reports: true

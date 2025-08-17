@@ -1,0 +1,247 @@
+# Agent Configuration for AstroAgent Pipeline
+# Defines prompts, guardrails, scoring weights, and IO schemas
+
+# ============================================================================
+# Hypothesis Maker (HM) Configuration
+# ============================================================================
+
+hypothesis_maker:
+  model: "gpt-4"
+  temperature: 0.7
+  max_tokens: 2000
+  
+  system_prompt: |
+    You are an expert astrophysicist and hypothesis generator. Your role is to:
+    1. Generate novel, testable hypotheses based on current literature
+    2. Ensure each hypothesis is falsifiable and specific
+    3. Provide clear rationale grounded in existing research
+    4. Identify required data sources and basic methodology
+    
+    Quality standards:
+    - Hypothesis must make a specific, measurable prediction
+    - Include 3-8 relevant literature references
+    - Scope should be achievable within estimated effort
+    - Avoid vague or unfalsifiable claims
+  
+  user_prompt_template: |
+    Generate {n_hypotheses} novel astrophysics hypotheses in the following domains: {domain_tags}
+    
+    Research context:
+    - Focus on recent developments from the last {recency_years} years
+    - Consider data availability from major surveys: {available_surveys}
+    - Estimated effort range: {min_effort_days}-{max_effort_days} days
+    
+    For each hypothesis, provide:
+    1. Clear falsifiable statement
+    2. Brief rationale with literature context
+    3. Minimal test sketch (data + expected signal)
+    4. 3-8 key references (bibcodes or arXiv IDs)
+    5. Required datasets and methods
+    6. Effort estimate in days
+  
+  guardrails:
+    min_hypothesis_words: 50
+    max_hypothesis_words: 150
+    min_rationale_words: 100
+    max_rationale_words: 300
+    required_fields: ["hypothesis", "rationale", "required_data", "methods"]
+    forbidden_phrases: ["might be", "could possibly", "perhaps", "it is likely that"]
+    
+  output_schema:
+    type: "array"
+    items:
+      type: "object"
+      required: ["idea_id", "title", "hypothesis", "rationale", "domain_tags", 
+                "novelty_refs", "required_data", "methods", "est_effort_days"]
+      properties:
+        idea_id: {"type": "string", "pattern": "^01[A-Z0-9]{24}$"}
+        title: {"type": "string", "maxLength": 100}
+        hypothesis: {"type": "string", "minLength": 50, "maxLength": 350}
+        rationale: {"type": "string", "minLength": 100, "maxLength": 500}
+        domain_tags: {"type": "array", "items": {"type": "string"}}
+        novelty_refs: {"type": "array", "items": {"type": "string"}}
+        required_data: {"type": "array", "items": {"type": "string"}}
+        methods: {"type": "array", "items": {"type": "string"}}
+        est_effort_days: {"type": "integer", "minimum": 1, "maximum": 30}
+
+# ============================================================================
+# Reviewer (RV) Configuration  
+# ============================================================================
+
+reviewer:
+  model: "gpt-4"
+  temperature: 0.3
+  max_tokens: 1500
+  
+  system_prompt: |
+    You are a senior astrophysics researcher conducting rigorous peer review.
+    Evaluate hypotheses on four key dimensions:
+    
+    1. IMPACT (1-5): Will this change understanding or provide useful techniques?
+    2. FEASIBILITY (1-5): Are data and methods accessible within effort estimate?
+    3. TESTABILITY (1-5): Can success/failure be clearly determined?
+    4. NOVELTY (1-5): How much does this differ from existing work?
+    
+    Be critical but constructive. Focus on scientific rigor and practical constraints.
+  
+  scoring_rubric:
+    impact:
+      5: "Paradigm-shifting discovery potential"
+      4: "Significant advance in field knowledge"  
+      3: "Solid contribution with clear applications"
+      2: "Incremental but useful result"
+      1: "Minimal scientific value"
+    
+    feasibility:
+      5: "All data/tools readily available, straightforward analysis"
+      4: "Good data access, well-established methods"
+      3: "Some challenges but clearly surmountable"
+      2: "Significant technical hurdles, uncertain timeline"
+      1: "Major obstacles, likely to fail"
+    
+    testability:
+      5: "Crystal clear success criteria and statistical plan"
+      4: "Well-defined outcomes and validation approach"
+      3: "Reasonable metrics, some ambiguity acceptable"
+      2: "Vague success criteria, difficult to interpret"
+      1: "Untestable or circular reasoning"
+      
+    novelty:
+      5: "Completely new approach or discovery area"
+      4: "Significant methodological or conceptual advance"
+      3: "Solid extension of existing work"
+      2: "Minor variation on known approaches"
+      1: "Largely redundant with prior work"
+  
+  approval_thresholds:
+    approved: {"total_min": 13, "individual_min": 3}
+    revision: {"total_min": 9, "total_max": 12}
+    rejected: {"total_max": 8}
+  
+  output_schema:
+    type: "object"
+    required: ["idea_id", "impact_score", "feasibility_score", "testability_score", 
+               "novelty_score", "total_score", "status", "reviewer_notes"]
+    properties:
+      idea_id: {"type": "string"}
+      impact_score: {"type": "integer", "minimum": 1, "maximum": 5}
+      feasibility_score: {"type": "integer", "minimum": 1, "maximum": 5}
+      testability_score: {"type": "integer", "minimum": 1, "maximum": 5}
+      novelty_score: {"type": "integer", "minimum": 1, "maximum": 5}
+      total_score: {"type": "integer", "minimum": 4, "maximum": 20}
+      status: {"type": "string", "enum": ["Approved", "Needs Revision", "Rejected"]}
+      reviewer_notes: {"type": "string", "maxLength": 1000}
+
+# ============================================================================
+# Experiment Designer (ED) Configuration
+# ============================================================================
+
+experiment_designer:
+  model: "gpt-4"
+  temperature: 0.5
+  max_tokens: 3000
+  
+  system_prompt: |
+    You are an experienced research methodologist specializing in astrophysics.
+    Your role is to design rigorous, reproducible experiments with:
+    
+    1. Clear objectives and success criteria
+    2. Detailed data acquisition and quality control plans
+    3. Appropriate statistical methods and validation approaches
+    4. Risk assessment and mitigation strategies
+    5. Resource requirements and timeline estimates
+    
+    Follow best practices for preregistration and reproducible research.
+  
+  ready_checklist:
+    - "Experiment plan complete and detailed"
+    - "Data sources identified and accessible"
+    - "Analysis pipeline documented and tested"
+    - "Success criteria clearly defined"
+    - "Risks and mitigations documented"
+    - "Compute and storage requirements estimated"
+    - "Reproducibility script validates"
+
+# ============================================================================
+# Experimenter (EX) Configuration
+# ============================================================================
+
+experimenter:
+  model: "gpt-4"
+  temperature: 0.2
+  max_tokens: 2000
+  
+  system_prompt: |
+    You are a meticulous data analyst executing astrophysics research.
+    Follow the preregistered analysis plan exactly. Document all steps:
+    
+    1. Data acquisition with quality checks
+    2. Preprocessing and cleaning steps
+    3. Statistical analysis with sensitivity tests
+    4. Results validation and robustness checks
+    5. Clear documentation of limitations
+    
+    Maintain complete provenance and reproducibility.
+
+# ============================================================================
+# Peer Reviewer (PR) Configuration
+# ============================================================================
+
+peer_reviewer:
+  model: "gpt-4"
+  temperature: 0.3
+  max_tokens: 2000
+  
+  system_prompt: |
+    You are conducting final peer review of a completed analysis.
+    Check for:
+    
+    1. Analysis follows preregistered plan
+    2. Results are statistically sound
+    3. Code runs and reproduces key findings  
+    4. Claims are supported by evidence
+    5. Novelty compared to existing literature
+    6. Limitations and caveats acknowledged
+    
+    Be thorough and provide specific, actionable feedback.
+  
+  validation_checks:
+    - "Statistical methods appropriate"
+    - "P-hacking safeguards in place"
+    - "Code runs without errors"
+    - "Key results reproduce within tolerance"
+    - "Figures regenerate correctly"
+    - "Claims match evidence"
+    - "Literature comparison adequate"
+
+# ============================================================================
+# Reporter (RP) Configuration
+# ============================================================================
+
+reporter:
+  model: "gpt-4"
+  temperature: 0.4
+  max_tokens: 2500
+  
+  system_prompt: |
+    You are writing the final research report and public summary.
+    Create clear, accurate documentation of:
+    
+    1. Research objectives and methods
+    2. Key findings with appropriate caveats
+    3. Significance and implications
+    4. Limitations and future work
+    5. Public-friendly summary
+    
+    Follow academic writing standards with clear, precise language.
+
+# ============================================================================
+# Global Settings
+# ============================================================================
+
+global:
+  retry_attempts: 3
+  retry_delay: 1.0
+  timeout_seconds: 120
+  log_level: "INFO"
+  validation_strict: true

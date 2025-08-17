@@ -1,0 +1,587 @@
+"""
+AstroAgent Pipeline Orchestration System.
+
+Implements the research pipeline state machine using LangGraph for
+coordinated agent execution and state management.
+"""
+
+import os
+import sys
+import argparse
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, TypedDict
+
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+
+from ..agents import (
+    create_agent, 
+    AgentExecutionContext, 
+    AgentResult,
+    AGENT_REGISTRY
+)
+from .tools import RegistryManager, StateValidator
+from .registry import ProjectRegistry
+
+
+# ============================================================================
+# State Definition
+# ============================================================================
+
+class PipelineState(TypedDict):
+    """State object passed between agents in the pipeline."""
+    
+    # Current processing context
+    current_idea_id: Optional[str]
+    current_state: str
+    previous_state: Optional[str]
+    
+    # Agent inputs and outputs
+    agent_inputs: Dict[str, Any]
+    agent_outputs: Dict[str, Any]
+    
+    # Pipeline metadata
+    pipeline_id: str
+    execution_start: datetime
+    total_agents_run: int
+    
+    # Error handling
+    errors: List[Dict[str, Any]]
+    retry_count: int
+    
+    # Registry state
+    ideas_updated: List[str]
+    projects_updated: List[str]
+
+
+# ============================================================================
+# Agent Node Functions
+# ============================================================================
+
+def hypothesis_maker_node(state: PipelineState) -> PipelineState:
+    """Execute Hypothesis Maker agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Hypothesis Maker")
+    
+    try:
+        # Create agent
+        agent = create_agent('hypothesis_maker')
+        
+        # Prepare context
+        context = AgentExecutionContext(
+            agent_name='hypothesis_maker',
+            state_name='hypothesis_generation',
+            previous_state=state.get('previous_state'),
+            input_data=state.get('agent_inputs', {}),
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Update state
+        state['agent_outputs']['hypothesis_maker'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            state['current_state'] = 'initial_review'
+            
+            # Track updated ideas
+            hypotheses = result.output_data.get('hypotheses', [])
+            for hypothesis in hypotheses:
+                state['ideas_updated'].append(hypothesis['idea_id'])
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'hypothesis_maker',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Hypothesis Maker execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'hypothesis_maker',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
+def reviewer_node(state: PipelineState) -> PipelineState:
+    """Execute Reviewer agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Reviewer")
+    
+    try:
+        # Create agent
+        agent = create_agent('reviewer')
+        
+        # Prepare context
+        context = AgentExecutionContext(
+            agent_name='reviewer',
+            state_name='initial_review',
+            previous_state=state.get('previous_state'),
+            input_data=state.get('agent_inputs', {}),
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Update state
+        state['agent_outputs']['reviewer'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            # Determine next state based on review results
+            reviewed_ideas = result.output_data.get('reviewed_ideas', [])
+            approved_count = sum(1 for idea in reviewed_ideas if idea.get('status') == 'Approved')
+            
+            if approved_count > 0:
+                state['current_state'] = 'experiment_design'
+            else:
+                state['current_state'] = 'archive'  # No ideas approved
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'reviewer',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Reviewer execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'reviewer',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
+def experiment_designer_node(state: PipelineState) -> PipelineState:
+    """Execute Experiment Designer agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Experiment Designer")
+    
+    try:
+        # Create agent
+        agent = create_agent('experiment_designer')
+        
+        # Get approved idea to design experiment for
+        idea_id = state.get('current_idea_id')
+        
+        context = AgentExecutionContext(
+            agent_name='experiment_designer',
+            state_name='experiment_design',
+            previous_state=state.get('previous_state'),
+            input_data={'idea_id': idea_id} if idea_id else {},
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Update state
+        state['agent_outputs']['experiment_designer'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            ready_checks_passed = result.output_data.get('ready_checks_passed', False)
+            
+            if ready_checks_passed:
+                state['current_state'] = 'experiment_execution'
+            else:
+                state['current_state'] = 'ready_check_failed'
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'experiment_designer',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Experiment Designer execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'experiment_designer',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
+def archive_node(state: PipelineState) -> PipelineState:
+    """Archive rejected or completed work."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Archiving work")
+    
+    # Mark pipeline as completed
+    state['current_state'] = 'archived'
+    
+    return state
+
+
+def error_node(state: PipelineState) -> PipelineState:
+    """Handle pipeline errors."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.error("Pipeline encountered errors")
+    
+    # Log all errors
+    for error in state.get('errors', []):
+        logger.error(f"Error in {error['agent']}: {error['error']}")
+    
+    state['current_state'] = 'failed'
+    
+    return state
+
+
+# ============================================================================
+# Routing Functions
+# ============================================================================
+
+def route_from_start(state: PipelineState) -> str:
+    """Route from start state."""
+    return 'hypothesis_maker'
+
+
+def route_from_hypothesis_maker(state: PipelineState) -> str:
+    """Route from hypothesis maker."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'initial_review':
+        return 'reviewer'
+    elif current_state == 'error':
+        return 'error'
+    else:
+        return 'error'
+
+
+def route_from_reviewer(state: PipelineState) -> str:
+    """Route from reviewer."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'experiment_design':
+        return 'experiment_designer'
+    elif current_state == 'archive':
+        return 'archive'
+    elif current_state == 'error':
+        return 'error'
+    else:
+        return 'error'
+
+
+def route_from_experiment_designer(state: PipelineState) -> str:
+    """Route from experiment designer."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'experiment_execution':
+        return 'archive'  # Simplified - would go to experimenter
+    elif current_state == 'ready_check_failed':
+        return 'archive'  # Would normally loop back to design
+    elif current_state == 'error':
+        return 'error'
+    else:
+        return 'error'
+
+
+# ============================================================================
+# Pipeline Graph Construction
+# ============================================================================
+
+def create_pipeline_graph() -> StateGraph:
+    """Create the main pipeline state graph."""
+    
+    # Initialize graph
+    workflow = StateGraph(PipelineState)
+    
+    # Add nodes
+    workflow.add_node("hypothesis_maker", hypothesis_maker_node)
+    workflow.add_node("reviewer", reviewer_node)
+    workflow.add_node("experiment_designer", experiment_designer_node)
+    workflow.add_node("archive", archive_node)
+    workflow.add_node("error", error_node)
+    
+    # Define entry point
+    workflow.set_entry_point("hypothesis_maker")
+    
+    # Add conditional edges
+    workflow.add_conditional_edges(
+        "hypothesis_maker",
+        route_from_hypothesis_maker,
+        {
+            "reviewer": "reviewer",
+            "error": "error"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "reviewer", 
+        route_from_reviewer,
+        {
+            "experiment_designer": "experiment_designer",
+            "archive": "archive",
+            "error": "error"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "experiment_designer",
+        route_from_experiment_designer,
+        {
+            "archive": "archive",
+            "error": "error"
+        }
+    )
+    
+    # Terminal states
+    workflow.add_edge("archive", END)
+    workflow.add_edge("error", END)
+    
+    return workflow
+
+
+# ============================================================================
+# Pipeline Execution
+# ============================================================================
+
+class AstroAgentPipeline:
+    """Main pipeline orchestrator."""
+    
+    def __init__(self, config_dir: str = "config", data_dir: str = "data"):
+        """Initialize pipeline.
+        
+        Args:
+            config_dir: Configuration directory path
+            data_dir: Data directory path
+        """
+        self.config_dir = Path(config_dir)
+        self.data_dir = Path(data_dir)
+        
+        self.logger = self._setup_logger()
+        
+        # Initialize components
+        self.registry_manager = RegistryManager(data_dir)
+        self.state_validator = StateValidator()
+        
+        # Create graph
+        self.workflow = create_pipeline_graph()
+        
+        # Setup checkpointing
+        checkpointer = MemorySaver()
+        self.app = self.workflow.compile(checkpointer=checkpointer)
+    
+    def _setup_logger(self) -> logging.Logger:
+        """Setup pipeline logger."""
+        logger = logging.getLogger('astroagent.orchestration')
+        
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+        
+        return logger
+    
+    def create_initial_state(self, agent_inputs: Dict[str, Any]) -> PipelineState:
+        """Create initial pipeline state.
+        
+        Args:
+            agent_inputs: Inputs for the first agent
+            
+        Returns:
+            Initial pipeline state
+        """
+        
+        return PipelineState(
+            current_idea_id=None,
+            current_state='start',
+            previous_state=None,
+            agent_inputs=agent_inputs,
+            agent_outputs={},
+            pipeline_id=f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            execution_start=datetime.now(timezone.utc),
+            total_agents_run=0,
+            errors=[],
+            retry_count=0,
+            ideas_updated=[],
+            projects_updated=[]
+        )
+    
+    def run_pipeline(self, agent_inputs: Dict[str, Any], 
+                    config: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Run the complete pipeline.
+        
+        Args:
+            agent_inputs: Initial inputs for the pipeline
+            config: Optional configuration overrides
+            
+        Returns:
+            Pipeline execution results
+        """
+        
+        self.logger.info("Starting AstroAgent pipeline execution")
+        
+        # Create initial state
+        initial_state = self.create_initial_state(agent_inputs)
+        
+        try:
+            # Run the pipeline
+            final_state = self.app.invoke(
+                initial_state,
+                config={"configurable": {"thread_id": initial_state["pipeline_id"]}}
+            )
+            
+            # Extract results
+            results = {
+                'success': final_state['current_state'] not in ['failed', 'error'],
+                'final_state': final_state['current_state'],
+                'pipeline_id': final_state['pipeline_id'],
+                'agents_run': final_state['total_agents_run'],
+                'ideas_updated': final_state['ideas_updated'],
+                'projects_updated': final_state['projects_updated'],
+                'agent_outputs': final_state['agent_outputs'],
+                'errors': final_state['errors'],
+                'execution_time': (datetime.now(timezone.utc) - final_state['execution_start']).total_seconds()
+            }
+            
+            if results['success']:
+                self.logger.info(f"Pipeline completed successfully in {results['execution_time']:.1f}s")
+            else:
+                self.logger.error(f"Pipeline failed after {results['execution_time']:.1f}s")
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Pipeline execution failed: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e),
+                'pipeline_id': initial_state['pipeline_id']
+            }
+
+
+# ============================================================================
+# CLI Interface  
+# ============================================================================
+
+def main():
+    """Command line interface for pipeline execution."""
+    
+    parser = argparse.ArgumentParser(description='AstroAgent Pipeline Orchestrator')
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Run command
+    run_parser = subparsers.add_parser('run', help='Run a specific agent or full pipeline')
+    run_parser.add_argument('agent', choices=['HM', 'RV', 'ED', 'EX', 'PR', 'RP', 'pipeline'],
+                           help='Agent to run or "pipeline" for full pipeline')
+    run_parser.add_argument('--tags', type=str, help='Domain tags (comma-separated)')
+    run_parser.add_argument('--n', type=int, default=5, help='Number of hypotheses to generate')
+    run_parser.add_argument('--idea', type=str, help='Specific idea ID to process')
+    run_parser.add_argument('--config-dir', type=str, default='config', help='Configuration directory')
+    run_parser.add_argument('--data-dir', type=str, default='data', help='Data directory')
+    
+    # Status command
+    status_parser = subparsers.add_parser('status', help='Show pipeline status')
+    status_parser.add_argument('--data-dir', type=str, default='data', help='Data directory')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    # Setup logging
+    logging.basicConfig(level=logging.INFO)
+    
+    try:
+        if args.command == 'run':
+            pipeline = AstroAgentPipeline(args.config_dir, args.data_dir)
+            
+            if args.agent == 'pipeline':
+                # Run full pipeline
+                agent_inputs = {}
+                if args.tags:
+                    agent_inputs['domain_tags'] = [tag.strip() for tag in args.tags.split(',')]
+                if args.n:
+                    agent_inputs['n_hypotheses'] = args.n
+                
+                results = pipeline.run_pipeline(agent_inputs)
+                
+                if results['success']:
+                    print(f"Pipeline completed successfully!")
+                    print(f"Final state: {results['final_state']}")
+                    print(f"Agents run: {results['agents_run']}")
+                    print(f"Ideas updated: {len(results['ideas_updated'])}")
+                else:
+                    print(f"Pipeline failed: {results.get('error', 'Unknown error')}")
+                    if results.get('errors'):
+                        for error in results['errors']:
+                            print(f"  {error['agent']}: {error['error']}")
+            
+            else:
+                # Run individual agent
+                print(f"Individual agent execution not yet implemented for {args.agent}")
+        
+        elif args.command == 'status':
+            # Show status
+            registry_manager = RegistryManager(args.data_dir)
+            
+            # Load registries and show status
+            print("Pipeline Status:")
+            print("=" * 50)
+            
+            # Ideas register status
+            try:
+                ideas_df = registry_manager.load_registry('ideas_register')
+                print(f"Ideas Register: {len(ideas_df)} total ideas")
+                if not ideas_df.empty:
+                    status_counts = ideas_df['status'].value_counts()
+                    for status, count in status_counts.items():
+                        print(f"  {status}: {count}")
+            except Exception as e:
+                print(f"  Error loading ideas register: {e}")
+            
+            print()
+            
+            # Project index status  
+            try:
+                projects_df = registry_manager.load_registry('project_index')
+                print(f"Project Index: {len(projects_df)} total projects")
+                if not projects_df.empty:
+                    maturity_counts = projects_df['maturity'].value_counts()
+                    for maturity, count in maturity_counts.items():
+                        print(f"  {maturity}: {count}")
+            except Exception as e:
+                print(f"  Error loading project index: {e}")
+    
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

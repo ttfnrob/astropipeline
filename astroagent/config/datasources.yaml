@@ -1,0 +1,311 @@
+# Data Sources Configuration for AstroAgent Pipeline
+# Defines APIs, catalogs, surveys, and data access patterns
+
+# ============================================================================
+# Literature and Bibliographic Sources
+# ============================================================================
+
+literature:
+  ads:
+    name: "SAO/NASA Astrophysics Data System"
+    base_url: "https://api.adsabs.harvard.edu/v1"
+    auth_method: "bearer_token"
+    auth_env_var: "ADS_API_TOKEN"
+    rate_limit: 5000  # requests per day
+    endpoints:
+      search: "/search"
+      bibcode: "/search/bigquery"
+      export: "/export"
+    default_params:
+      rows: 200
+      sort: "date desc"
+      fl: "bibcode,title,author,year,abstract,keyword,doctype"
+    search_fields: ["title", "abstract", "author", "keyword", "object"]
+    
+  arxiv:
+    name: "arXiv Preprint Server"
+    base_url: "http://export.arxiv.org/api"
+    auth_method: "none"
+    rate_limit: 3  # requests per second
+    endpoints:
+      query: "/query"
+    search_categories: ["astro-ph", "astro-ph.CO", "astro-ph.EP", "astro-ph.GA", 
+                       "astro-ph.HE", "astro-ph.IM", "astro-ph.SR"]
+    default_params:
+      max_results: 200
+      sort_by: "submittedDate"
+      sort_order: "descending"
+      
+  semantic_scholar:
+    name: "Semantic Scholar API"
+    base_url: "https://api.semanticscholar.org"
+    auth_method: "api_key"
+    auth_env_var: "SEMANTIC_SCHOLAR_API_KEY"
+    rate_limit: 100  # requests per second
+    endpoints:
+      paper: "/graph/v1/paper"
+      search: "/graph/v1/paper/search"
+      citations: "/graph/v1/paper/{paper_id}/citations"
+    fields: ["title", "abstract", "year", "authors", "venue", "citationCount"]
+    
+  crossref:
+    name: "Crossref DOI Database"
+    base_url: "https://api.crossref.org"
+    auth_method: "none"
+    rate_limit: 50  # requests per second
+    endpoints:
+      works: "/works"
+    filters: ["type:journal-article", "has-abstract:true"]
+
+# ============================================================================
+# Survey Data and Catalogs
+# ============================================================================
+
+surveys:
+  gaia:
+    name: "Gaia Data Release"
+    provider: "ESA"
+    access_method: "astroquery"
+    query_class: "astroquery.gaia.Gaia"
+    data_releases: ["DR3", "DR2", "EDR3"]
+    default_release: "DR3"
+    archive_url: "https://gea.esac.esa.int/archive/"
+    rate_limit: 10  # concurrent queries
+    max_rows: 500000
+    typical_columns: ["source_id", "ra", "dec", "parallax", "pmra", "pmdec", 
+                     "g_mean_mag", "bp_rp", "radial_velocity"]
+    
+  sdss:
+    name: "Sloan Digital Sky Survey"
+    provider: "SDSS Collaboration"
+    access_method: "astroquery"
+    query_class: "astroquery.sdss.SDSS"
+    data_releases: ["DR17", "DR16", "DR15"]
+    default_release: "DR17"
+    base_url: "https://skyserver.sdss.org/casjobs/"
+    crossmatch_radius: "2 arcsec"
+    
+  panstarrs:
+    name: "Panoramic Survey Telescope and Rapid Response System"
+    provider: "Pan-STARRS"
+    access_method: "astroquery"
+    query_class: "astroquery.mast.Catalogs"
+    catalog_name: "Panstarrs"
+    filters: ["g", "r", "i", "z", "y"]
+    
+  twomass:
+    name: "Two Micron All Sky Survey"
+    provider: "IPAC/Caltech"
+    access_method: "astroquery"
+    query_class: "astroquery.irsa.Irsa"
+    catalog: "fp_psc"  # point source catalog
+    bands: ["J", "H", "K"]
+    
+  wise:
+    name: "Wide-field Infrared Survey Explorer"
+    provider: "NASA/JPL"
+    access_method: "astroquery" 
+    query_class: "astroquery.irsa.Irsa"
+    catalog: "allwise_p3as_psd"
+    bands: ["W1", "W2", "W3", "W4"]
+    wavelengths: [3.4, 4.6, 12, 22]  # microns
+
+# ============================================================================
+# Time Domain and Variable Sources
+# ============================================================================
+
+time_domain:
+  ztf:
+    name: "Zwicky Transient Facility"
+    provider: "Caltech"
+    access_method: "astroquery"
+    query_class: "astroquery.irsa.Irsa" 
+    base_url: "https://irsa.ipac.caltech.edu/ibe"
+    data_types: ["lightcurves", "alerts", "forced_photometry"]
+    filters: ["zg", "zr", "zi"]
+    
+  tess:
+    name: "Transiting Exoplanet Survey Satellite"
+    provider: "NASA/MIT"
+    access_method: "astroquery"
+    query_class: "astroquery.mast.Observations"
+    mission: "TESS"
+    data_products: ["lightcurves", "target_pixel_files", "full_frame_images"]
+    sectors: 70  # approximate current number
+    
+  kepler:
+    name: "Kepler Space Telescope"
+    provider: "NASA"
+    access_method: "astroquery"
+    query_class: "astroquery.mast.Observations"
+    mission: "Kepler"
+    data_products: ["lightcurves", "target_pixel_files"]
+
+# ============================================================================
+# Ephemerides and Solar System
+# ============================================================================
+
+ephemerides:
+  horizons:
+    name: "JPL HORIZONS System"
+    provider: "NASA/JPL"
+    access_method: "astroquery"
+    query_class: "astroquery.jplhorizons.Horizons"
+    base_url: "https://ssd.jpl.nasa.gov/horizons.cgi"
+    object_types: ["planets", "moons", "asteroids", "comets", "spacecraft"]
+    ephemeris_types: ["observer", "vector", "elements"]
+    
+  mpc:
+    name: "Minor Planet Center"
+    provider: "IAU"
+    access_method: "astroquery"
+    query_class: "astroquery.mpc.MPC"
+    base_url: "https://www.minorplanetcenter.net"
+    data_types: ["orbital_elements", "observations", "ephemerides"]
+    
+  spice:
+    name: "SPICE Toolkit Kernels"
+    provider: "NASA/JPL"
+    access_method: "spiceypy"
+    kernel_types: ["planetary", "spacecraft", "instrument", "events"]
+    kernel_urls:
+      generic: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels"
+      missions: "https://naif.jpl.nasa.gov/pub/naif"
+
+# ============================================================================
+# Mission Archives
+# ============================================================================
+
+archives:
+  mast:
+    name: "Mikulski Archive for Space Telescopes"
+    provider: "STScI"
+    access_method: "astroquery"
+    query_class: "astroquery.mast.Observations"
+    base_url: "https://mast.stsci.edu"
+    auth_env_var: "MAST_TOKEN"  # optional for public data
+    missions: ["HST", "JWST", "TESS", "Kepler", "K2", "GALEX", "Spitzer"]
+    data_rights: ["PUBLIC", "EXCLUSIVE_ACCESS"]
+    
+  heasarc:
+    name: "High Energy Astrophysics Science Archive"
+    provider: "NASA/GSFC"
+    access_method: "astroquery"
+    query_class: "astroquery.heasarc.Heasarc"
+    base_url: "https://heasarc.gsfc.nasa.gov"
+    missions: ["Chandra", "XMM-Newton", "Swift", "Fermi", "RXTE"]
+    
+  ipac:
+    name: "Infrared Processing and Analysis Center"
+    provider: "Caltech"
+    access_method: "astroquery"
+    query_class: "astroquery.irsa.Irsa"
+    base_url: "https://irsa.ipac.caltech.edu"
+    services: ["catalogs", "images", "spectra", "time_series"]
+
+# ============================================================================
+# Data Access Configuration
+# ============================================================================
+
+access_patterns:
+  # Batch query settings
+  batch_processing:
+    max_concurrent_queries: 5
+    retry_attempts: 3
+    retry_delay: 2.0  # seconds
+    timeout: 300  # seconds
+    
+  # Cache settings
+  caching:
+    enabled: true
+    cache_dir: "data/external/cache"
+    ttl_hours: 168  # 1 week
+    max_cache_size_gb: 10
+    
+  # Rate limiting
+  rate_limiting:
+    global_requests_per_second: 10
+    per_service_limits: true
+    backoff_strategy: "exponential"
+    
+  # Data validation
+  validation:
+    check_completeness: true
+    verify_coordinates: true
+    flag_suspicious_values: true
+    coordinate_systems: ["icrs", "galactic", "ecliptic"]
+
+# ============================================================================
+# Query Templates and Shortcuts
+# ============================================================================
+
+query_templates:
+  stellar_properties:
+    gaia: |
+      SELECT source_id, ra, dec, parallax, pmra, pmdec, 
+             g_mean_mag, bp_rp, radial_velocity, teff_gspphot
+      FROM gaiadr3.gaia_source
+      WHERE {spatial_constraint}
+      AND parallax_over_error > 5
+      AND g_mean_mag < {mag_limit}
+    
+  galaxy_sample:
+    sdss: |
+      SELECT objid, ra, dec, u, g, r, i, z, specObjID, z as redshift
+      FROM PhotoObjAll p
+      JOIN SpecObjAll s ON p.objid = s.bestobjid  
+      WHERE p.type = 3  -- galaxies
+      AND p.clean = 1
+      AND s.z BETWEEN {z_min} AND {z_max}
+    
+  variable_stars:
+    ztf: |
+      Filter by: 
+      - program_id IN (1, 2)  -- public surveys
+      - nobs > {min_observations}
+      - chi2dof > {variability_threshold}
+      - magnitude range: {mag_min} to {mag_max}
+
+# ============================================================================
+# Data Quality and Validation
+# ============================================================================
+
+quality_control:
+  # Coordinate validation
+  coordinates:
+    ra_range: [0, 360]  # degrees
+    dec_range: [-90, 90]  # degrees
+    proper_motion_limit: 10000  # mas/yr, flag if exceeded
+    parallax_snr_min: 5  # signal-to-noise ratio
+    
+  # Photometry validation  
+  photometry:
+    magnitude_range: [-5, 30]  # reasonable magnitude limits
+    color_range: [-2, 5]  # reasonable color limits
+    error_fraction_max: 0.5  # flag if error > 50% of measurement
+    
+  # Time series validation
+  time_series:
+    min_observations: 10
+    max_gap_days: 1000
+    outlier_sigma: 5.0
+    
+# ============================================================================
+# Usage Monitoring and Quotas
+# ============================================================================
+
+monitoring:
+  track_usage: true
+  log_queries: true
+  quota_warnings: [0.8, 0.9, 0.95]  # warn at 80%, 90%, 95% of limit
+  
+  daily_limits:
+    ads: 4500  # leave buffer below 5000 limit
+    arxiv: 250000  # very high, practically unlimited
+    gaia: 1000  # queries per day
+    mast: 10000  # requests per day
+    
+  storage_limits:
+    raw_data_gb: 100
+    cache_gb: 50
+    temp_files_gb: 20

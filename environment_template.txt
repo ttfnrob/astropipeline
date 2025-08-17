@@ -1,0 +1,109 @@
+# ============================================================================
+# AstroAgent Pipeline Environment Configuration Template
+# Copy this content to a .env file and fill in your actual API keys
+# ============================================================================
+
+# ============================================================================
+# AI/LLM API Keys (Choose one or more)
+# ============================================================================
+
+# OpenAI API Key (for GPT-4 models used by agents)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Anthropic API Key (alternative to OpenAI)
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# Ollama Base URL (for local LLM hosting)
+OLLAMA_BASE_URL=http://localhost:11434
+
+# ============================================================================
+# Astrophysics Data Sources - Required
+# ============================================================================
+
+# SAO/NASA Astrophysics Data System (Required for literature search)
+ADS_API_TOKEN=your_ads_api_token_here
+
+# NASA API Key (for various NASA services)
+NASA_API_KEY=your_nasa_api_key_here
+
+# ============================================================================
+# Optional Literature and Research APIs
+# ============================================================================
+
+# Semantic Scholar API (optional, for additional literature analysis)
+SEMANTIC_SCHOLAR_API_KEY=your_semantic_scholar_api_key_here
+
+# ============================================================================
+# Optional Mission Archives and Data Services
+# ============================================================================
+
+# MAST (Mikulski Archive for Space Telescopes) - optional for authenticated downloads
+MAST_TOKEN=your_mast_token_here
+
+# ============================================================================
+# Optional Web Search APIs (for extended research capabilities)
+# ============================================================================
+
+# SerpAPI (Google search API)
+SERPAPI_KEY=your_serpapi_key_here
+
+# Tavily API (alternative web search)
+TAVILY_API_KEY=your_tavily_api_key_here
+
+# ============================================================================
+# Optional Cloud Services
+# ============================================================================
+
+# Google Drive Service Account (if using Google Sheets integration)
+GDRIVE_SERVICE_JSON=path/to/your/service-account.json
+
+# Google Sheets Credentials (alternative to service account)
+GOOGLE_SHEETS_CRED=your_google_sheets_credentials_here
+
+# ============================================================================
+# Application Configuration
+# ============================================================================
+
+# Environment (development, staging, production)
+ENV=development
+
+# Logging level
+LOG_LEVEL=INFO
+
+# Data directories
+DATA_DIR=./astroagent/data
+CACHE_DIR=./astroagent/data/external/cache
+
+# Rate limiting and API usage
+MAX_CONCURRENT_REQUESTS=5
+DEFAULT_TIMEOUT_SECONDS=300
+
+# ============================================================================
+# Database Configuration (if using SQLite or other DB)
+# ============================================================================
+
+# Database URL (SQLite default)
+DATABASE_URL=sqlite:///./astroagent/data/registry/astroagent.db
+
+# ============================================================================
+# Security and Authentication
+# ============================================================================
+
+# Secret key for session management (generate a random string)
+SECRET_KEY=your_secret_key_here_generate_random_string
+
+# JWT Secret (if using JWT tokens)
+JWT_SECRET=your_jwt_secret_here
+
+# ============================================================================
+# Optional Development Settings
+# ============================================================================
+
+# Debug mode (true/false)
+DEBUG=true
+
+# Verbose logging for development
+VERBOSE_LOGGING=true
+
+# Mock API responses for testing (true/false)
+MOCK_API_RESPONSES=false
