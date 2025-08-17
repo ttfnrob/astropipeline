@@ -24,6 +24,14 @@ from typing import Dict, Any
 # Ensure we can import from the project
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not available, environment variables should be set manually
+    pass
+
 def check_environment():
     """Check if required environment variables and dependencies are set up."""
     print("🔧 Checking environment...")
@@ -191,9 +199,18 @@ async def start_web_ui():
     except Exception as e:
         print(f"❌ Error starting web UI: {e}")
 
-def run_pipeline(domain_tags=None, n_hypotheses=3):
+def run_pipeline(domain_tags=None, n_hypotheses=3, mode='discrete'):
     """Run the agent pipeline."""
-    print("🤖 Starting AstroAgent Pipeline...")
+    
+    if mode == 'continuous':
+        print("🔄 Starting Continuous AstroAgent Pipeline...")
+        return run_continuous_pipeline(domain_tags, n_hypotheses)
+    else:
+        print("🤖 Starting Discrete AstroAgent Pipeline...")
+        return run_discrete_pipeline(domain_tags, n_hypotheses)
+
+def run_discrete_pipeline(domain_tags=None, n_hypotheses=3):
+    """Run a single discrete pipeline execution."""
     
     try:
         from astroagent.orchestration.graph import AstroAgentPipeline
@@ -236,6 +253,61 @@ def run_pipeline(domain_tags=None, n_hypotheses=3):
         return False
     except Exception as e:
         print(f"❌ Error running pipeline: {e}")
+        return False
+
+def run_continuous_pipeline(domain_tags=None, n_hypotheses=3, complete_ideas=3, max_time_minutes=None):
+    """Run continuous pipeline until completion criteria are met."""
+    
+    try:
+        from astroagent.orchestration.continuous_pipeline import ContinuousPipeline
+        
+        # Set up pipeline
+        config_dir = str(Path(__file__).parent / "astroagent" / "config")
+        data_dir = str(Path(__file__).parent / "data")
+        
+        pipeline = ContinuousPipeline(
+            config_dir=config_dir,
+            data_dir=data_dir
+        )
+        
+        # Default inputs
+        if domain_tags is None:
+            domain_tags = ['stellar evolution', 'galactic dynamics']
+        
+        initial_inputs = {
+            'domain_tags': domain_tags,
+            'pipeline_size': max(n_hypotheses, 3),  # Keep 3+ ideas in pipeline
+            'recency_years': 3
+        }
+        
+        print(f"🎯 Domains: {', '.join(domain_tags)}")
+        print(f"📊 Target: Complete {complete_ideas} ideas through full workflow")
+        if max_time_minutes:
+            print(f"⏰ Max time: {max_time_minutes} minutes")
+        print("🔄 Running continuous pipeline...\n")
+        
+        # Run continuous pipeline
+        import asyncio
+        results = asyncio.run(pipeline.run_continuous(
+            initial_inputs=initial_inputs,
+            completion_mode="ideas",
+            completion_target=complete_ideas,
+            max_duration_minutes=max_time_minutes
+        ))
+        
+        if results['success']:
+            print(f"\n✅ Continuous pipeline completed!")
+            print(f"📊 Completed {results['completed_ideas']} ideas in {results['runtime_seconds']:.1f} seconds")
+            print(f"🔄 Total cycles: {results['total_cycles']}")
+            print(f"⚡ Rate: {results['ideas_per_hour']:.1f} ideas/hour")
+        
+        return results['success']
+        
+    except ImportError as e:
+        print(f"❌ Error importing continuous pipeline: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Error running continuous pipeline: {e}")
         return False
 
 def run_demo():
@@ -282,8 +354,8 @@ def run_test():
         return False
 
 async def run_all(domain_tags=None, n_hypotheses=3):
-    """Run both pipeline and web UI."""
-    print("🚀 Starting Full AstroAgent Pipeline System")
+    """Run both pipeline and web UI sequentially."""
+    print("🚀 Starting Full AstroAgent Pipeline System (Sequential Mode)")
     print("=" * 50)
     
     # Run pipeline first
@@ -296,16 +368,147 @@ async def run_all(domain_tags=None, n_hypotheses=3):
     else:
         print("❌ Pipeline failed, not starting web UI")
 
+async def run_concurrent(domain_tags=None, n_hypotheses=3):
+    """Run both discrete pipeline and web UI concurrently."""
+    print("🚀 Starting Full AstroAgent Pipeline System (Concurrent Discrete Mode)")
+    print("=" * 50)
+    
+    # Start web UI in background
+    print("🌐 Starting web UI server...")
+    web_ui_task = asyncio.create_task(start_web_ui_background())
+    
+    # Give web UI time to start
+    await asyncio.sleep(2)
+    
+    print("🤖 Starting discrete pipeline execution...")
+    print("📊 Monitor progress at: http://localhost:8000")
+    print("=" * 50)
+    
+    # Run pipeline in background while web UI serves
+    try:
+        pipeline_task = asyncio.create_task(run_pipeline_async(domain_tags, n_hypotheses))
+        
+        # Wait for both to complete (web UI runs indefinitely until interrupted)
+        await asyncio.gather(pipeline_task, web_ui_task)
+        
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down system...")
+        web_ui_task.cancel()
+        try:
+            await web_ui_task
+        except asyncio.CancelledError:
+            pass
+
+async def run_concurrent_continuous(domain_tags=None, n_hypotheses=3, complete_ideas=3, max_time_minutes=None):
+    """Run both continuous pipeline and web UI concurrently."""
+    print("🚀 Starting Full AstroAgent Pipeline System (Concurrent Continuous Mode)")
+    print("=" * 50)
+    
+    # Start web UI in background
+    print("🌐 Starting web UI server...")
+    web_ui_task = asyncio.create_task(start_web_ui_background())
+    
+    # Give web UI time to start
+    await asyncio.sleep(2)
+    
+    print("🔄 Starting continuous pipeline execution...")
+    print(f"📊 Target: Complete {complete_ideas} ideas through full workflow")
+    if max_time_minutes:
+        print(f"⏰ Max time: {max_time_minutes} minutes")
+    print("📊 Monitor progress at: http://localhost:8000")
+    print("=" * 50)
+    
+    # Run continuous pipeline in background while web UI serves
+    try:
+        pipeline_task = asyncio.create_task(run_continuous_pipeline_async(
+            domain_tags, n_hypotheses, complete_ideas, max_time_minutes))
+        
+        # Wait for both to complete (web UI runs indefinitely until interrupted)
+        await asyncio.gather(pipeline_task, web_ui_task)
+        
+    except KeyboardInterrupt:
+        print("\n👋 Shutting down system...")
+        web_ui_task.cancel()
+        try:
+            await web_ui_task
+        except asyncio.CancelledError:
+            pass
+
+async def start_web_ui_background():
+    """Start web UI in background mode."""
+    try:
+        import uvicorn
+        from web_ui.app import app
+        
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=8000,
+            log_level="info",
+            reload=False
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+        
+    except Exception as e:
+        print(f"❌ Error starting web UI: {e}")
+
+async def run_pipeline_async(domain_tags=None, n_hypotheses=3):
+    """Run discrete pipeline asynchronously."""
+    def run_in_thread():
+        return run_discrete_pipeline(domain_tags, n_hypotheses)
+    
+    # Run the synchronous pipeline in a thread pool
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        success = await loop.run_in_executor(executor, run_in_thread)
+    
+    if success:
+        print("\n✅ Discrete pipeline completed successfully!")
+        print("📊 View results at: http://localhost:8000")
+    else:
+        print("\n❌ Pipeline execution failed")
+    
+    return success
+
+async def run_continuous_pipeline_async(domain_tags=None, n_hypotheses=3, complete_ideas=3, max_time_minutes=None):
+    """Run continuous pipeline asynchronously."""
+    def run_in_thread():
+        return run_continuous_pipeline(domain_tags, n_hypotheses, complete_ideas, max_time_minutes)
+    
+    # Run the synchronous pipeline in a thread pool
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        success = await loop.run_in_executor(executor, run_in_thread)
+    
+    if success:
+        print("\n✅ Continuous pipeline completed successfully!")
+        print("📊 View results at: http://localhost:8000")
+    else:
+        print("\n❌ Continuous pipeline execution failed")
+    
+    return success
+
 def main():
     """Main CLI interface."""
     parser = argparse.ArgumentParser(
         description="AstroAgent Pipeline - AI-Powered Astrophysics Research System",
         epilog="""
 Examples:
+  python start.py                        # Run pipeline and web UI together (default)
+  python start.py --domains "exoplanets" --complete-ideas 2
+                                         # Run until 2 exoplanet ideas are completed
   python start.py web                    # Start web UI only
-  python start.py pipeline               # Run pipeline with defaults  
-  python start.py pipeline --domains "stellar evolution,exoplanets" --count 5
-  python start.py all                    # Run pipeline then start web UI
+  python start.py pipeline               # Run continuous pipeline only (default)
+  python start.py pipeline --mode discrete --count 5
+                                         # Run discrete mode: generate 5 hypotheses once
+  python start.py pipeline --complete-ideas 5 --max-time 30
+                                         # Run until 5 ideas completed or 30 min max
+  python start.py all                    # Run pipeline then start web UI (sequential)
   python start.py demo                   # Demo mode with sample data
   python start.py test                   # Quick functionality test
         """,
@@ -314,8 +517,10 @@ Examples:
     
     parser.add_argument(
         'action',
-        choices=['web', 'pipeline', 'all', 'demo', 'test'],
-        help='Action to perform'
+        choices=['web', 'pipeline', 'all', 'concurrent', 'demo', 'test'],
+        nargs='?',
+        default='concurrent',
+        help='Action to perform (default: concurrent - runs pipeline and web UI together)'
     )
     
     parser.add_argument(
@@ -329,6 +534,26 @@ Examples:
         type=int,
         default=3,
         help='Number of hypotheses to generate (default: 3)'
+    )
+    
+    parser.add_argument(
+        '--mode',
+        choices=['discrete', 'continuous'],
+        default='continuous',
+        help='Pipeline mode: continuous (until completion) or discrete (run once, default: continuous)'
+    )
+    
+    parser.add_argument(
+        '--complete-ideas',
+        type=int,
+        default=3,
+        help='Number of ideas to complete through full workflow (continuous mode, default: 3)'
+    )
+    
+    parser.add_argument(
+        '--max-time',
+        type=int,
+        help='Maximum runtime in minutes (optional safety limit)'
     )
     
     parser.add_argument(
@@ -362,11 +587,29 @@ Examples:
             asyncio.run(start_web_ui())
             
         elif args.action == 'pipeline':
-            success = run_pipeline(domain_tags, args.count)
+            if args.mode == 'continuous':
+                complete_ideas = getattr(args, 'complete_ideas', 3)
+                max_time = getattr(args, 'max_time', None)
+                success = run_continuous_pipeline(
+                    domain_tags=domain_tags, 
+                    n_hypotheses=args.count,
+                    complete_ideas=complete_ideas,
+                    max_time_minutes=max_time
+                )
+            else:
+                success = run_discrete_pipeline(domain_tags, args.count)
             sys.exit(0 if success else 1)
             
         elif args.action == 'all':
             asyncio.run(run_all(domain_tags, args.count))
+            
+        elif args.action == 'concurrent':
+            if args.mode == 'continuous':
+                asyncio.run(run_concurrent_continuous(domain_tags, args.count, 
+                                                    getattr(args, 'complete_ideas', 3),
+                                                    getattr(args, 'max_time', None)))
+            else:
+                asyncio.run(run_concurrent(domain_tags, args.count))
             
         elif args.action == 'demo':
             run_demo()

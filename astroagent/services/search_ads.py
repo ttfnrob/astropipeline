@@ -96,7 +96,7 @@ class ADSSearchService:
             year = random.randint(2022, 2025)
             mock_paper = {
                 'bibcode': f'2024ApJ...{900+i:03d}..{i+1:03d}M',
-                'title': [f'Mock {domain.title()} Research Paper {i+1}: {random.choice(domain_keywords[domain]).title()}'],
+                'title': f'Mock {domain.title()} Research Paper {i+1}: {random.choice(domain_keywords[domain]).title()}',
                 'author': [f'Smith, J.{chr(65+i)}', f'Johnson, M.{chr(66+i)}', f'Brown, K.{chr(67+i)}'],
                 'year': str(year),
                 'pub': 'The Astrophysical Journal',
@@ -195,7 +195,7 @@ class ADSSearchService:
         self.logger.info(f"Searching ADS: {full_query[:100]}...")
         
         try:
-            response = self._make_request('/search', params)
+            response = self._make_request('/search/query', params)
             
             papers = response.get('response', {}).get('docs', [])
             self.logger.info(f"Found {len(papers)} papers")
@@ -266,7 +266,7 @@ class ADSSearchService:
         }
         
         try:
-            response = self._make_request('/search', params)
+            response = self._make_request('/search/query', params)
             papers = response.get('response', {}).get('docs', [])
             
             if papers:

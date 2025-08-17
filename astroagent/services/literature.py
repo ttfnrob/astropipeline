@@ -178,9 +178,15 @@ class LiteratureService:
             # Combine title and abstract for comparison
             paper_text = ""
             if 'title' in paper:
-                paper_text += paper['title'] + " "
+                title = paper['title']
+                if isinstance(title, list):
+                    title = ' '.join(title) if title else ''
+                paper_text += str(title) + " "
             if 'abstract' in paper and paper['abstract']:
-                paper_text += paper['abstract']
+                abstract = paper['abstract']
+                if isinstance(abstract, list):
+                    abstract = ' '.join(abstract) if abstract else ''
+                paper_text += str(abstract)
             
             if not paper_text.strip():
                 continue
@@ -257,9 +263,15 @@ class LiteratureService:
         for paper in papers:
             text = ""
             if 'title' in paper:
-                text += paper['title'] + " "
+                title = paper['title']
+                if isinstance(title, list):
+                    title = ' '.join(title) if title else ''
+                text += str(title) + " "
             if 'abstract' in paper and paper['abstract']:
-                text += paper['abstract']
+                abstract = paper['abstract']
+                if isinstance(abstract, list):
+                    abstract = ' '.join(abstract) if abstract else ''
+                text += str(abstract)
             
             if text.strip():
                 all_text.append(text)

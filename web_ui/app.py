@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 # Add root directory to path to import astroagent
@@ -35,6 +36,22 @@ logger = logging.getLogger(__name__)
 # FastAPI Application Setup
 # ============================================================================
 
+def clean_nan_values(obj: Any) -> Any:
+    """Recursively clean NaN values from nested dictionaries and lists for JSON serialization."""
+    if isinstance(obj, dict):
+        return {key: clean_nan_values(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan_values(item) for item in obj]
+    elif pd.isna(obj):
+        return None
+    elif isinstance(obj, (np.integer, np.floating)):
+        if pd.isna(obj) or not np.isfinite(obj):
+            return None
+        return obj.item()  # Convert numpy types to Python native types
+    elif isinstance(obj, (float, int)) and (pd.isna(obj) or obj != obj):  # Check for NaN
+        return None
+    return obj
+
 app = FastAPI(
     title="AstroAgent Pipeline Monitor",
     description="Real-time monitoring interface for AstroAgent Pipeline execution",
@@ -44,6 +61,17 @@ app = FastAPI(
 # Global variables for tracking active pipelines
 active_pipelines: Dict[str, Dict[str, Any]] = {}
 websocket_connections: List[WebSocket] = []
+
+# Global pipeline control state
+pipeline_control_state = {
+    "continuous_mode": False,
+    "pipeline_state": "idle",  # idle, running, paused, stopping
+    "current_cycle": 0,
+    "completed_ideas": 0,
+    "target_ideas": None,
+    "start_time": None,
+    "pause_time": None
+}
 
 # Initialize components
 DATA_DIR = str(Path(__file__).parent.parent / "data")
@@ -61,6 +89,16 @@ class PipelineStatus(BaseModel):
     total_projects: int
     recent_activity: List[Dict[str, Any]]
     agent_status: Dict[str, str]
+    continuous_mode: bool = False
+    pipeline_state: str = "idle"  # idle, running, paused, stopping
+    current_cycle: int = 0
+    completed_ideas: int = 0
+    target_ideas: Optional[int] = None
+    runtime_seconds: float = 0.0
+
+class PipelineControlRequest(BaseModel):
+    """Request for pipeline control actions."""
+    action: str  # pause, resume, stop
 
 class IdeaInfo(BaseModel):
     """Detailed idea information for display."""
@@ -147,6 +185,13 @@ def get_recent_ideas(limit: int = 10) -> List[Dict[str, Any]]:
         for _, row in ideas_df.head(limit).iterrows():
             idea = row.to_dict()
             
+            # Handle NaN values and convert to JSON-serializable format
+            for key, value in idea.items():
+                if pd.isna(value):
+                    idea[key] = None
+                elif isinstance(value, (int, float)) and (pd.isna(value) or value != value):  # Check for NaN
+                    idea[key] = None
+            
             # Parse JSON fields
             for field in ['domain_tags', 'novelty_refs', 'required_data', 'methods']:
                 if field in idea and isinstance(idea[field], str):
@@ -154,6 +199,8 @@ def get_recent_ideas(limit: int = 10) -> List[Dict[str, Any]]:
                         idea[field] = json.loads(idea[field])
                     except (json.JSONDecodeError, TypeError):
                         idea[field] = []
+                elif field in idea and idea[field] is None:
+                    idea[field] = []
             
             recent_ideas.append(idea)
         
@@ -178,10 +225,9 @@ def get_active_projects(limit: int = 10) -> List[Dict[str, Any]]:
         return []
 
 def format_agent_status() -> Dict[str, str]:
-    """Get current agent status based on recent activity."""
-    # This is a simplified version - in production you'd track actual agent execution
-    stats = get_pipeline_statistics()
+    """Get current agent status based on pipeline state and recent activity."""
     
+    # Base status - all agents idle by default
     status = {
         'hypothesis_maker': 'idle',
         'reviewer': 'idle', 
@@ -189,15 +235,43 @@ def format_agent_status() -> Dict[str, str]:
         'experimenter': 'idle'
     }
     
-    # Basic heuristics based on data
-    if stats.get('recent_ideas_30d', 0) > 0:
-        status['hypothesis_maker'] = 'recently_active'
+    # If continuous mode is running, show agents as active based on pipeline state
+    if pipeline_control_state["continuous_mode"] and pipeline_control_state["pipeline_state"] == "running":
+        # In continuous mode, cycle through agents
+        current_cycle = pipeline_control_state["current_cycle"]
+        cycle_stage = current_cycle % 4  # 4 stages in the pipeline
+        
+        if cycle_stage == 0:
+            status['hypothesis_maker'] = 'active'
+        elif cycle_stage == 1:
+            status['reviewer'] = 'active'
+        elif cycle_stage == 2:
+            status['experiment_designer'] = 'active'
+        elif cycle_stage == 3:
+            status['experimenter'] = 'active'
     
-    idea_statuses = stats.get('idea_statuses', {})
-    if idea_statuses.get('Under Review', 0) > 0:
-        status['reviewer'] = 'active'
-    if idea_statuses.get('Approved', 0) > 0:
-        status['experiment_designer'] = 'recently_active'
+    # Check for any active pipelines from the legacy tracking
+    elif len(active_pipelines) > 0:
+        # Simple heuristic: if pipelines are running, hypothesis maker is likely active
+        status['hypothesis_maker'] = 'active'
+    
+    # If paused, show all as paused
+    if pipeline_control_state["pipeline_state"] == "paused":
+        for agent in status:
+            if status[agent] == 'active':
+                status[agent] = 'paused'
+    
+    # Fallback to data-based heuristics if not in continuous mode
+    if not pipeline_control_state["continuous_mode"]:
+        stats = get_pipeline_statistics()
+        if stats.get('recent_ideas_30d', 0) > 0:
+            status['hypothesis_maker'] = 'recently_active'
+        
+        idea_statuses = stats.get('idea_statuses', {})
+        if idea_statuses.get('Under Review', 0) > 0:
+            status['reviewer'] = 'recently_active'
+        if idea_statuses.get('Approved', 0) > 0:
+            status['experiment_designer'] = 'recently_active'
     
     return status
 
@@ -231,32 +305,160 @@ async def read_root():
         </html>
         """, status_code=200)
 
-@app.get("/api/status", response_model=PipelineStatus)
+@app.get("/api/status")
 async def get_status():
     """Get current pipeline status."""
-    stats = get_pipeline_statistics()
-    recent_ideas = get_recent_ideas(5)
-    agent_status = format_agent_status()
-    
-    return PipelineStatus(
-        active_pipelines=len(active_pipelines),
-        total_ideas=stats.get('total_ideas', 0),
-        total_projects=stats.get('total_projects', 0),
-        recent_activity=recent_ideas,
-        agent_status=agent_status
-    )
+    try:
+        stats = get_pipeline_statistics()
+        recent_ideas = get_recent_ideas(5)
+        agent_status = format_agent_status()
+        
+        # Calculate runtime
+        runtime_seconds = 0.0
+        if pipeline_control_state["start_time"]:
+            current_time = datetime.now()
+            if pipeline_control_state["pause_time"]:
+                runtime_seconds = (pipeline_control_state["pause_time"] - pipeline_control_state["start_time"]).total_seconds()
+            else:
+                runtime_seconds = (current_time - pipeline_control_state["start_time"]).total_seconds()
+        
+        status_data = {
+            "active_pipelines": len(active_pipelines),
+            "total_ideas": stats.get('total_ideas', 0),
+            "total_projects": stats.get('total_projects', 0),
+            "recent_activity": recent_ideas,
+            "agent_status": agent_status,
+            "continuous_mode": pipeline_control_state["continuous_mode"],
+            "pipeline_state": pipeline_control_state["pipeline_state"],
+            "current_cycle": pipeline_control_state["current_cycle"],
+            "completed_ideas": pipeline_control_state["completed_ideas"],
+            "target_ideas": pipeline_control_state["target_ideas"],
+            "runtime_seconds": runtime_seconds
+        }
+        
+        # Clean NaN values before returning
+        cleaned_data = clean_nan_values(status_data)
+        return JSONResponse(content=cleaned_data)
+        
+    except Exception as e:
+        logger.error(f"Error getting status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/pipeline/control")
+async def control_pipeline(request: PipelineControlRequest):
+    """Control the continuous pipeline (pause, resume, stop)."""
+    try:
+        action = request.action.lower()
+        
+        if action == "pause":
+            if pipeline_control_state["pipeline_state"] == "running":
+                pipeline_control_state["pipeline_state"] = "paused"
+                pipeline_control_state["pause_time"] = datetime.now()
+                await broadcast_to_websockets({"type": "pipeline_paused"})
+                return {"success": True, "message": "Pipeline paused"}
+            else:
+                return {"success": False, "message": "Pipeline is not running"}
+                
+        elif action == "resume":
+            if pipeline_control_state["pipeline_state"] == "paused":
+                pipeline_control_state["pipeline_state"] = "running"
+                if pipeline_control_state["pause_time"]:
+                    # Adjust start time to account for pause duration
+                    pause_duration = datetime.now() - pipeline_control_state["pause_time"]
+                    if pipeline_control_state["start_time"]:
+                        pipeline_control_state["start_time"] += pause_duration
+                pipeline_control_state["pause_time"] = None
+                await broadcast_to_websockets({"type": "pipeline_resumed"})
+                return {"success": True, "message": "Pipeline resumed"}
+            else:
+                return {"success": False, "message": "Pipeline is not paused"}
+                
+        elif action == "stop":
+            pipeline_control_state["pipeline_state"] = "stopping"
+            await broadcast_to_websockets({"type": "pipeline_stopping"})
+            # Reset after a short delay to allow graceful shutdown
+            await asyncio.sleep(2)
+            pipeline_control_state.update({
+                "continuous_mode": False,
+                "pipeline_state": "idle",
+                "current_cycle": 0,
+                "completed_ideas": 0,
+                "target_ideas": None,
+                "start_time": None,
+                "pause_time": None
+            })
+            await broadcast_to_websockets({"type": "pipeline_stopped"})
+            return {"success": True, "message": "Pipeline stopped"}
+            
+        else:
+            return {"success": False, "message": f"Unknown action: {action}"}
+            
+    except Exception as e:
+        logger.error(f"Error controlling pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ideas")
-async def get_ideas(limit: int = 20, status: Optional[str] = None):
-    """Get ideas from the registry."""
+async def get_ideas(
+    limit: int = 20, 
+    status: Optional[str] = None,
+    sort_by: Optional[str] = "created_at",
+    sort_order: Optional[str] = "desc",
+    search: Optional[str] = None
+):
+    """Get ideas from the registry with sorting, filtering, and search."""
     try:
-        if status:
-            ideas = project_registry.get_ideas_by_status(status)
-        else:
-            ideas = get_recent_ideas(limit)
+        ideas_df = registry_manager.load_registry('ideas_register')
         
-        return {"ideas": ideas}
+        if ideas_df.empty:
+            return JSONResponse(content={"ideas": [], "total": 0})
+        
+        # Filter by status if provided
+        if status and status != "all":
+            ideas_df = ideas_df[ideas_df['status'] == status]
+        
+        # Search functionality
+        if search:
+            search_lower = search.lower()
+            mask = (
+                ideas_df['title'].str.lower().str.contains(search_lower, na=False) |
+                ideas_df['hypothesis'].str.lower().str.contains(search_lower, na=False) |
+                ideas_df['domain_tags'].str.lower().str.contains(search_lower, na=False)
+            )
+            ideas_df = ideas_df[mask]
+        
+        # Sort the dataframe
+        if sort_by in ideas_df.columns:
+            ascending = sort_order.lower() == "asc"
+            ideas_df = ideas_df.sort_values(sort_by, ascending=ascending, na_position='last')
+        
+        # Apply limit
+        limited_df = ideas_df.head(limit)
+        
+        # Convert to dict and clean NaN values
+        ideas = []
+        for _, row in limited_df.iterrows():
+            idea = row.to_dict()
+            # Clean NaN values
+            cleaned_idea = clean_nan_values(idea)
+            
+            # Parse JSON fields
+            for field in ['domain_tags', 'novelty_refs', 'required_data', 'methods']:
+                if field in cleaned_idea and isinstance(cleaned_idea[field], str):
+                    try:
+                        cleaned_idea[field] = json.loads(cleaned_idea[field])
+                    except (json.JSONDecodeError, TypeError):
+                        cleaned_idea[field] = []
+            
+            ideas.append(cleaned_idea)
+        
+        return JSONResponse(content={
+            "ideas": ideas, 
+            "total": len(ideas_df),
+            "filtered": len(limited_df)
+        })
+        
     except Exception as e:
+        logger.error(f"Error getting ideas: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/projects")

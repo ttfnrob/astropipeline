@@ -67,6 +67,48 @@
                 </div>
             </section>
 
+            <!-- Pipeline Control Section -->
+            <section class="pipeline-control-section" id="pipeline-controls" style="display: none;">
+                <div class="control-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-cogs"></i> Continuous Pipeline Control</h3>
+                        <div class="pipeline-status-badge" id="pipeline-status-badge">
+                            <span class="status-text" id="pipeline-status-text">Idle</span>
+                        </div>
+                    </div>
+                    <div class="card-content">
+                        <div class="control-row">
+                            <div class="control-info">
+                                <div class="control-metric">
+                                    <span class="label">Runtime:</span>
+                                    <span class="value" id="pipeline-runtime">00:00:00</span>
+                                </div>
+                                <div class="control-metric">
+                                    <span class="label">Cycle:</span>
+                                    <span class="value" id="pipeline-cycle">0</span>
+                                </div>
+                                <div class="control-metric">
+                                    <span class="label">Completed:</span>
+                                    <span class="value" id="pipeline-completed">0</span>
+                                    <span class="target" id="pipeline-target">/3</span>
+                                </div>
+                            </div>
+                            <div class="control-buttons">
+                                <button id="pause-resume-btn" class="control-btn pause-btn" disabled>
+                                    <i class="fas fa-pause"></i> Pause
+                                </button>
+                                <button id="stop-btn" class="control-btn stop-btn" disabled>
+                                    <i class="fas fa-stop"></i> Stop
+                                </button>
+                            </div>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- Agent Status Section -->
             <section class="agent-status-section">
                 <h2><i class="fas fa-robot"></i> Agent Status</h2>
@@ -144,16 +186,67 @@
 
                 <!-- Ideas Tab -->
                 <div class="tab-content active" id="ideas-tab">
+                    <div class="table-controls">
+                        <div class="control-group">
+                            <label for="ideas-search">Search:</label>
+                            <input type="text" id="ideas-search" placeholder="Search ideas..." class="search-input">
+                        </div>
+                        <div class="control-group">
+                            <label for="ideas-status-filter">Status:</label>
+                            <select id="ideas-status-filter" class="filter-select">
+                                <option value="all">All Statuses</option>
+                                <option value="Proposed">Proposed</option>
+                                <option value="Under Review">Under Review</option>
+                                <option value="Approved">Approved</option>
+                                <option value="Needs Revision">Needs Revision</option>
+                                <option value="Rejected">Rejected</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label for="ideas-sort">Sort by:</label>
+                            <select id="ideas-sort" class="sort-select">
+                                <option value="created_at">Created Date</option>
+                                <option value="title">Title</option>
+                                <option value="status">Status</option>
+                                <option value="total_score">Score</option>
+                                <option value="est_effort_days">Effort</option>
+                            </select>
+                            <select id="ideas-sort-order" class="sort-order-select">
+                                <option value="desc">Descending</option>
+                                <option value="asc">Ascending</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label for="ideas-limit">Show:</label>
+                            <select id="ideas-limit" class="limit-select">
+                                <option value="20">20 rows</option>
+                                <option value="50">50 rows</option>
+                                <option value="100">100 rows</option>
+                            </select>
+                        </div>
+                    </div>
                     <div class="data-table-container">
-                        <table class="data-table">
+                        <table class="data-table sortable">
                             <thead>
                                 <tr>
-                                    <th>Title</th>
-                                    <th>Status</th>
-                                    <th>Score</th>
-                                    <th>Domain Tags</th>
-                                    <th>Effort</th>
-                                    <th>Created</th>
+                                    <th class="sortable-header" data-column="title">
+                                        Title <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable-header" data-column="status">
+                                        Status <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable-header" data-column="total_score">
+                                        Score <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable-header" data-column="domain_tags">
+                                        Domain Tags <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable-header" data-column="est_effort_days">
+                                        Effort <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable-header" data-column="created_at">
+                                        Created <i class="fas fa-sort"></i>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody id="ideas-table-body">
@@ -162,6 +255,9 @@
                                 </tr>
                             </tbody>
                         </table>
+                        <div class="table-info">
+                            <span id="ideas-table-info">Showing 0 of 0 ideas</span>
+                        </div>
                     </div>
                 </div>
 
@@ -260,6 +356,98 @@
                 </div>
             </div>
         </aside>
+    </div>
+
+    <!-- Idea Detail Modal -->
+    <div id="idea-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-title">Idea Details</h2>
+                <button class="modal-close" id="modal-close-btn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="idea-detail-grid">
+                    <div class="detail-section">
+                        <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
+                        <div class="detail-item">
+                            <span class="label">ID:</span>
+                            <span class="value" id="modal-idea-id">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Status:</span>
+                            <span class="value" id="modal-status">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Created:</span>
+                            <span class="value" id="modal-created">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Domain Tags:</span>
+                            <span class="value" id="modal-domains">-</span>
+                        </div>
+                    </div>
+
+                    <div class="detail-section">
+                        <h3><i class="fas fa-chart-line"></i> Scores & Metrics</h3>
+                        <div class="detail-item">
+                            <span class="label">Total Score:</span>
+                            <span class="value" id="modal-total-score">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Novelty Score:</span>
+                            <span class="value" id="modal-novelty-score">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Impact Score:</span>
+                            <span class="value" id="modal-impact-score">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Feasibility Score:</span>
+                            <span class="value" id="modal-feasibility-score">-</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="label">Estimated Effort:</span>
+                            <span class="value" id="modal-effort">-</span>
+                        </div>
+                    </div>
+
+                    <div class="detail-section full-width">
+                        <h3><i class="fas fa-lightbulb"></i> Hypothesis</h3>
+                        <div class="detail-text" id="modal-hypothesis">-</div>
+                    </div>
+
+                    <div class="detail-section full-width">
+                        <h3><i class="fas fa-book"></i> Rationale</h3>
+                        <div class="detail-text" id="modal-rationale">-</div>
+                    </div>
+
+                    <div class="detail-section">
+                        <h3><i class="fas fa-database"></i> Required Data</h3>
+                        <ul class="detail-list" id="modal-required-data">
+                            <li>No data specified</li>
+                        </ul>
+                    </div>
+
+                    <div class="detail-section">
+                        <h3><i class="fas fa-tools"></i> Methods</h3>
+                        <ul class="detail-list" id="modal-methods">
+                            <li>No methods specified</li>
+                        </ul>
+                    </div>
+
+                    <div class="detail-section full-width" id="modal-notes-section" style="display: none;">
+                        <h3><i class="fas fa-sticky-note"></i> Reviewer Notes</h3>
+                        <div class="detail-text" id="modal-notes">-</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-close-footer-btn">Close</button>
+                <button class="btn btn-primary" id="modal-edit-btn" style="display: none;">Edit Idea</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>

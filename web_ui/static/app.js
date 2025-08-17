@@ -15,6 +15,9 @@ class PipelineMonitor {
     
     init() {
         this.setupEventListeners();
+        this.setupPipelineControls();
+        this.setupTableControls();
+        this.setupModal();
         this.connectWebSocket();
         this.loadInitialData();
         this.setupPeriodicUpdates();
@@ -138,10 +141,10 @@ class PipelineMonitor {
             // Load status
             const status = await this.fetchAPI('/api/status');
             this.updateStatusCards(status);
-            this.updateAgentStatus(status.agent_status);
+            this.updatePipelineStatus(status);
             
-            // Load ideas
-            await this.loadIdeas();
+            // Load ideas using enhanced table
+            await this.loadIdeasTable();
             
             // Load projects
             await this.loadProjects();
@@ -571,6 +574,419 @@ class PipelineMonitor {
         if (!this.isConnected) {
             this.connectWebSocket();
             this.loadInitialData();
+        }
+    }
+    
+    // Pipeline Control Methods
+    setupPipelineControls() {
+        const pauseResumeBtn = document.getElementById('pause-resume-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        
+        if (pauseResumeBtn) {
+            pauseResumeBtn.addEventListener('click', () => {
+                const action = pauseResumeBtn.classList.contains('pause-btn') ? 'pause' : 'resume';
+                this.controlPipeline(action);
+            });
+        }
+        
+        if (stopBtn) {
+            stopBtn.addEventListener('click', () => {
+                if (confirm('Are you sure you want to stop the continuous pipeline?')) {
+                    this.controlPipeline('stop');
+                }
+            });
+        }
+    }
+    
+    async controlPipeline(action) {
+        try {
+            const response = await fetch('/api/pipeline/control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ action })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                console.log(`Pipeline ${action} successful:`, result.message);
+                // Update UI immediately
+                this.updatePipelineControls();
+            } else {
+                console.error(`Pipeline ${action} failed:`, result.message);
+                alert(`Failed to ${action} pipeline: ${result.message}`);
+            }
+        } catch (error) {
+            console.error(`Error ${action} pipeline:`, error);
+            alert(`Error ${action} pipeline. Please try again.`);
+        }
+    }
+    
+    updatePipelineControls() {
+        // This will be called when status updates to refresh control states
+        setTimeout(() => {
+            this.loadInitialData();
+        }, 500);
+    }
+    
+    // Table Functionality
+    setupTableControls() {
+        // Ideas table controls
+        this.setupIdeasTableControls();
+    }
+    
+    setupIdeasTableControls() {
+        const searchInput = document.getElementById('ideas-search');
+        const statusFilter = document.getElementById('ideas-status-filter');
+        const sortSelect = document.getElementById('ideas-sort');
+        const sortOrderSelect = document.getElementById('ideas-sort-order');
+        const limitSelect = document.getElementById('ideas-limit');
+        
+        // Debounced search function
+        let searchTimeout;
+        if (searchInput) {
+            searchInput.addEventListener('input', () => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    this.loadIdeasTable();
+                }, 300);
+            });
+        }
+        
+        // Filter and sort controls
+        [statusFilter, sortSelect, sortOrderSelect, limitSelect].forEach(control => {
+            if (control) {
+                control.addEventListener('change', () => {
+                    this.loadIdeasTable();
+                });
+            }
+        });
+        
+        // Sortable headers
+        document.querySelectorAll('.sortable-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const column = header.dataset.column;
+                this.sortTable(column);
+            });
+        });
+    }
+    
+    sortTable(column) {
+        const sortSelect = document.getElementById('ideas-sort');
+        const sortOrderSelect = document.getElementById('ideas-sort-order');
+        
+        if (sortSelect && sortOrderSelect) {
+            // If clicking same column, toggle order
+            if (sortSelect.value === column) {
+                sortOrderSelect.value = sortOrderSelect.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortSelect.value = column;
+                sortOrderSelect.value = 'desc';
+            }
+            
+            this.loadIdeasTable();
+        }
+    }
+    
+    async loadIdeasTable() {
+        const searchInput = document.getElementById('ideas-search');
+        const statusFilter = document.getElementById('ideas-status-filter');
+        const sortSelect = document.getElementById('ideas-sort');
+        const sortOrderSelect = document.getElementById('ideas-sort-order');
+        const limitSelect = document.getElementById('ideas-limit');
+        
+        const params = new URLSearchParams();
+        
+        if (limitSelect) params.append('limit', limitSelect.value);
+        if (statusFilter && statusFilter.value !== 'all') params.append('status', statusFilter.value);
+        if (sortSelect) params.append('sort_by', sortSelect.value);
+        if (sortOrderSelect) params.append('sort_order', sortOrderSelect.value);
+        if (searchInput && searchInput.value.trim()) params.append('search', searchInput.value.trim());
+        
+        try {
+            const response = await fetch(`/api/ideas?${params}`);
+            const data = await response.json();
+            
+            this.updateIdeasTable(data.ideas || []);
+            this.updateTableInfo(data.total || 0, data.filtered || 0);
+            this.updateSortHeaders();
+            
+        } catch (error) {
+            console.error('Error loading ideas table:', error);
+            document.getElementById('ideas-table-body').innerHTML = 
+                '<tr><td colspan="6" class="error">Error loading ideas</td></tr>';
+        }
+    }
+    
+    updateIdeasTable(ideas) {
+        const tbody = document.getElementById('ideas-table-body');
+        if (!tbody) return;
+        
+        if (ideas.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">No ideas found</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = ideas.map((idea, index) => {
+            const domains = Array.isArray(idea.domain_tags) ? idea.domain_tags : [];
+            const effort = idea.est_effort_days || idea.effort_estimate_days || '-';
+            const score = idea.total_score || '-';
+            const created = idea.created_at ? new Date(idea.created_at).toLocaleDateString() : '-';
+            
+            const statusClass = idea.status ? idea.status.toLowerCase().replace(/\s+/g, '-') : 'unknown';
+            
+            return `
+                <tr data-idea-index="${index}" data-idea-id="${idea.idea_id}">
+                    <td title="${idea.hypothesis || ''}">${this.truncateText(idea.title || 'Untitled', 50)}</td>
+                    <td><span class="status-badge ${statusClass}">${idea.status || 'Unknown'}</span></td>
+                    <td>${score}</td>
+                    <td title="${domains.join(', ')}">${this.truncateText(domains.join(', '), 30)}</td>
+                    <td>${effort} days</td>
+                    <td>${created}</td>
+                </tr>
+            `;
+        }).join('');
+        
+        // Store ideas data for modal use
+        this.currentIdeasData = ideas;
+        
+        // Add click handlers to table rows
+        tbody.querySelectorAll('tr[data-idea-index]').forEach(row => {
+            row.addEventListener('click', () => {
+                const ideaIndex = parseInt(row.getAttribute('data-idea-index'));
+                this.showIdeaModal(ideas[ideaIndex]);
+            });
+        });
+    }
+    
+    updateTableInfo(total, filtered) {
+        const info = document.getElementById('ideas-table-info');
+        if (info) {
+            if (total === filtered) {
+                info.textContent = `Showing ${filtered} of ${total} ideas`;
+            } else {
+                info.textContent = `Showing ${filtered} of ${total} ideas (filtered)`;
+            }
+        }
+    }
+    
+    updateSortHeaders() {
+        const sortSelect = document.getElementById('ideas-sort');
+        const sortOrderSelect = document.getElementById('ideas-sort-order');
+        
+        if (!sortSelect || !sortOrderSelect) return;
+        
+        // Clear all sort indicators
+        document.querySelectorAll('.sortable-header').forEach(header => {
+            header.classList.remove('sorting-asc', 'sorting-desc');
+        });
+        
+        // Add sort indicator to active column
+        const activeHeader = document.querySelector(`[data-column="${sortSelect.value}"]`);
+        if (activeHeader) {
+            activeHeader.classList.add(sortOrderSelect.value === 'asc' ? 'sorting-asc' : 'sorting-desc');
+        }
+    }
+    
+    truncateText(text, maxLength) {
+        if (!text) return '';
+        return text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+    }
+    
+    // Enhanced Status Updates
+    updatePipelineStatus(status) {
+        // Update pipeline control visibility and state
+        const controlsSection = document.getElementById('pipeline-controls');
+        const statusBadge = document.getElementById('pipeline-status-badge');
+        const statusText = document.getElementById('pipeline-status-text');
+        const pauseResumeBtn = document.getElementById('pause-resume-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const runtime = document.getElementById('pipeline-runtime');
+        const cycle = document.getElementById('pipeline-cycle');
+        const completed = document.getElementById('pipeline-completed');
+        const target = document.getElementById('pipeline-target');
+        const progressFill = document.getElementById('progress-fill');
+        
+        if (status.continuous_mode) {
+            if (controlsSection) controlsSection.style.display = 'block';
+            
+            // Update status badge
+            if (statusBadge && statusText) {
+                statusBadge.className = `pipeline-status-badge ${status.pipeline_state}`;
+                statusText.textContent = status.pipeline_state.replace('_', ' ').toUpperCase();
+            }
+            
+            // Update metrics
+            if (runtime) {
+                const hours = Math.floor(status.runtime_seconds / 3600);
+                const minutes = Math.floor((status.runtime_seconds % 3600) / 60);
+                const seconds = Math.floor(status.runtime_seconds % 60);
+                runtime.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+            if (cycle) cycle.textContent = status.current_cycle || 0;
+            if (completed) completed.textContent = status.completed_ideas || 0;
+            if (target) target.textContent = `/${status.target_ideas || 0}`;
+            
+            // Update progress bar
+            if (progressFill && status.target_ideas) {
+                const progress = Math.min(100, (status.completed_ideas / status.target_ideas) * 100);
+                progressFill.style.width = `${progress}%`;
+            }
+            
+            // Update control buttons
+            if (pauseResumeBtn && stopBtn) {
+                if (status.pipeline_state === 'running') {
+                    pauseResumeBtn.disabled = false;
+                    pauseResumeBtn.className = 'control-btn pause-btn';
+                    pauseResumeBtn.innerHTML = '<i class="fas fa-pause"></i> Pause';
+                    stopBtn.disabled = false;
+                } else if (status.pipeline_state === 'paused') {
+                    pauseResumeBtn.disabled = false;
+                    pauseResumeBtn.className = 'control-btn resume-btn';
+                    pauseResumeBtn.innerHTML = '<i class="fas fa-play"></i> Resume';
+                    stopBtn.disabled = false;
+                } else {
+                    pauseResumeBtn.disabled = true;
+                    stopBtn.disabled = true;
+                }
+            }
+        } else {
+            if (controlsSection) controlsSection.style.display = 'none';
+        }
+        
+        // Update agent status with new indicators
+        this.updateAgentStatus(status.agent_status);
+    }
+    
+    updateAgentStatus(agentStatus) {
+        Object.entries(agentStatus).forEach(([agentName, status]) => {
+            const agentCard = document.getElementById(agentName.replace('_', '-'));
+            if (agentCard) {
+                const statusElement = agentCard.querySelector('.agent-status');
+                if (statusElement) {
+                    statusElement.className = `agent-status ${status}`;
+                    statusElement.textContent = status.replace('_', ' ').toUpperCase();
+                }
+            }
+        });
+    }
+    
+    // Modal functionality
+    setupModal() {
+        const modal = document.getElementById('idea-modal');
+        const closeBtn = document.getElementById('modal-close-btn');
+        const closeFooterBtn = document.getElementById('modal-close-footer-btn');
+        
+        // Close modal handlers
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.hideModal());
+        }
+        
+        if (closeFooterBtn) {
+            closeFooterBtn.addEventListener('click', () => this.hideModal());
+        }
+        
+        // Close modal when clicking outside
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.hideModal();
+                }
+            });
+        }
+        
+        // Close modal with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal && modal.classList.contains('show')) {
+                this.hideModal();
+            }
+        });
+    }
+    
+    showIdeaModal(idea) {
+        if (!idea) return;
+        
+        const modal = document.getElementById('idea-modal');
+        if (!modal) return;
+        
+        // Populate modal with idea data
+        this.populateModal(idea);
+        
+        // Show modal
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden'; // Prevent background scrolling
+    }
+    
+    hideModal() {
+        const modal = document.getElementById('idea-modal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = ''; // Restore scrolling
+        }
+    }
+    
+    populateModal(idea) {
+        // Basic Information
+        this.setModalElement('modal-title', idea.title || 'Untitled Idea');
+        this.setModalElement('modal-idea-id', idea.idea_id || '-');
+        this.setModalElement('modal-status', idea.status || 'Unknown');
+        this.setModalElement('modal-created', idea.created_at ? 
+            new Date(idea.created_at).toLocaleDateString() : '-');
+        
+        // Domain tags
+        const domains = Array.isArray(idea.domain_tags) ? idea.domain_tags : [];
+        this.setModalElement('modal-domains', domains.length > 0 ? domains.join(', ') : 'None specified');
+        
+        // Scores & Metrics
+        this.setModalElement('modal-total-score', idea.total_score || '-');
+        this.setModalElement('modal-novelty-score', idea.novelty_score || '-');
+        this.setModalElement('modal-impact-score', idea.impact_score || '-');
+        this.setModalElement('modal-feasibility-score', idea.feasibility_score || '-');
+        
+        const effort = idea.est_effort_days || idea.effort_estimate_days;
+        this.setModalElement('modal-effort', effort ? `${effort} days` : '-');
+        
+        // Hypothesis and Rationale
+        this.setModalElement('modal-hypothesis', idea.hypothesis || 'No hypothesis provided');
+        this.setModalElement('modal-rationale', idea.rationale || 'No rationale provided');
+        
+        // Required Data
+        const requiredData = Array.isArray(idea.required_data) ? idea.required_data : [];
+        this.setModalList('modal-required-data', requiredData, 'No data requirements specified');
+        
+        // Methods
+        const methods = Array.isArray(idea.methods) ? idea.methods : [];
+        this.setModalList('modal-methods', methods, 'No methods specified');
+        
+        // Reviewer Notes (show section only if notes exist)
+        const notesSection = document.getElementById('modal-notes-section');
+        const reviewerNotes = idea.reviewer_notes;
+        
+        if (reviewerNotes && reviewerNotes.trim()) {
+            this.setModalElement('modal-notes', reviewerNotes);
+            if (notesSection) notesSection.style.display = 'block';
+        } else {
+            if (notesSection) notesSection.style.display = 'none';
+        }
+    }
+    
+    setModalElement(elementId, value) {
+        const element = document.getElementById(elementId);
+        if (element) {
+            element.textContent = value || '-';
+        }
+    }
+    
+    setModalList(elementId, items, emptyMessage) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        
+        if (items.length === 0) {
+            element.innerHTML = `<li>${emptyMessage}</li>`;
+        } else {
+            element.innerHTML = items.map(item => `<li>${item}</li>`).join('');
         }
     }
 }

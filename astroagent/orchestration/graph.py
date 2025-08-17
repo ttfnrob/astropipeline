@@ -67,8 +67,11 @@ def hypothesis_maker_node(state: PipelineState) -> PipelineState:
     logger.info("Executing Hypothesis Maker")
     
     try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
         # Create agent
-        agent = create_agent('hypothesis_maker')
+        agent = create_agent('hypothesis_maker', config_dir)
         
         # Prepare context
         context = AgentExecutionContext(
@@ -122,8 +125,11 @@ def reviewer_node(state: PipelineState) -> PipelineState:
     logger.info("Executing Reviewer")
     
     try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
         # Create agent
-        agent = create_agent('reviewer')
+        agent = create_agent('reviewer', config_dir)
         
         # Prepare context
         context = AgentExecutionContext(
@@ -179,8 +185,11 @@ def experiment_designer_node(state: PipelineState) -> PipelineState:
     logger.info("Executing Experiment Designer")
     
     try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
         # Create agent
-        agent = create_agent('experiment_designer')
+        agent = create_agent('experiment_designer', config_dir)
         
         # Get approved idea to design experiment for
         idea_id = state.get('current_idea_id')
@@ -428,7 +437,8 @@ class AstroAgentPipeline:
             errors=[],
             retry_count=0,
             ideas_updated=[],
-            projects_updated=[]
+            projects_updated=[],
+            config_dir=str(self.config_dir)  # Add config directory to state
         )
     
     def run_pipeline(self, agent_inputs: Dict[str, Any], 
