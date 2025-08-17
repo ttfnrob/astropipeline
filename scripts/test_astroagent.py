@@ -7,8 +7,6 @@ import os
 import sys
 from pathlib import Path
 
-# Add package to path
-sys.path.insert(0, str(Path(__file__).parent))
 
 def test_hypothesis_generation():
     """Test hypothesis generation without full CLI."""
@@ -21,9 +19,9 @@ def test_hypothesis_generation():
         os.environ['ADS_API_TOKEN'] = 'mock_token_for_testing'
         
         # Import and test core functionality
-        from agents.common import AgentExecutionContext, generate_ulid
-        from agents.hypothesis_maker import HypothesisMaker
-        from agents.reviewer import Reviewer
+        from astroagent.agents.common import AgentExecutionContext, generate_ulid
+        from astroagent.agents.hypothesis_maker import HypothesisMaker
+        from astroagent.agents.reviewer import Reviewer
         
         # Test ULID generation
         test_id = generate_ulid()
@@ -87,7 +85,7 @@ def test_hypothesis_generation():
             'idea_id': test_id,
             'title': 'Test Stellar Evolution Hypothesis',
             'hypothesis': 'Stellar evolution models exhibit systematic deviations in metal-poor environments that correlate with galactic chemical evolution patterns.',
-            'rationale': 'Recent observations show unexplained discrepancies between theoretical predictions and observed stellar populations in ancient galactic components.',
+            'rationale': 'Recent observations show unexplained discrepancies between predicted and observed stellar populations in ancient galactic components.',
             'domain_tags': ['stellar evolution', 'galactic chemistry'],
             'required_data': ['Gaia DR3', 'SDSS'],
             'methods': ['Isochrone fitting', 'Chemical abundance analysis'],
@@ -106,7 +104,7 @@ def test_hypothesis_generation():
         print(f"   Novelty: {review_result['novelty_score']}/5")
         
         # Test registry
-        from orchestration.tools import RegistryManager
+        from astroagent.orchestration.tools import RegistryManager
         
         registry = RegistryManager('data')
         print(f"✅ Registry system: {len(registry.registries)} registries ready")
@@ -133,6 +131,7 @@ def test_hypothesis_generation():
         import traceback
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = test_hypothesis_generation()

@@ -80,3 +80,31 @@ Thumbs.db
 
 # Service account keys
 *.json
+
+# Research content - exclude actual hypotheses, ideas, and project files
+astroagent/projects/Archive/**/*
+astroagent/projects/Library/**/*
+astroagent/projects/Preparing/**/*
+astroagent/projects/Ready\ for\ Execution/**/*
+
+# Exclude generated research files (keep templates)
+*_idea.md
+*_experiment_plan.md
+*_hypothesis.md
+*_results.md
+*_review.md
+idea_*.md
+experiment_*.md
+hypothesis_*.md
+results_*.md
+
+# Research data registries and working files
+astroagent/data/registry/*.csv
+astroagent/data/vectors/*.json
+astroagent/data/interim/**/*
+astroagent/data/processed/**/*
+astroagent/data/external/**/*
+
+# Keep raw data folder structure but exclude contents
+astroagent/data/raw/**/*
+!astroagent/data/raw/.gitkeep
