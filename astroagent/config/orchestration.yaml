@@ -30,7 +30,7 @@ states:
     description: "Score and filter generated hypotheses"
     agent: "reviewer"
     input_registry: "ideas_register"
-    input_filter: {"status": "Proposed"}
+    input_filter: {"status": ["Proposed", "Under Review"]}
     output_registry: "ideas_register"
     transitions: ["hypothesis_generation", "experiment_design", "archive"]
     batch_processing: true
@@ -74,7 +74,7 @@ states:
     description: "Review experimental results"
     agent: "peer_reviewer"
     input_registry: "project_index"
-    input_filter: {"maturity": "Complete"}
+    input_filter: {"maturity": "Executed"}
     transitions: ["report_generation", "experiment_execution", "archive"]
     human_approval_required: true
     
@@ -247,13 +247,17 @@ registry_updates:
       experiment_design: ["maturity: 'Preparing'", "path: project_path"]
       ready_check: ["ready_checklist_status: 'Validating'"]
       experiment_execution: ["maturity: 'Running'", "execution_start: timestamp"]
+      peer_review: ["maturity: 'AwaitingReview'"]
     on_success:
       experiment_design: ["maturity: 'Prepared'", "analysis_plan_preregistered: true"]
       ready_check: ["ready_checklist_passed: true", "maturity: 'Ready'"]
-      experiment_execution: ["maturity: 'Complete'", "execution_end: timestamp"]
+      experiment_execution: ["maturity: 'Executed'", "execution_end: timestamp"]
+      peer_review: ["maturity: 'Reviewed'", "review_date: timestamp"]
+      report_generation: ["maturity: 'Complete'", "completion_date: timestamp"]
     on_failure:
       ready_check: ["ready_checklist_passed: false", "maturity: 'Preparing'"]
       experiment_execution: ["maturity: 'Failed'"]
+      peer_review: ["maturity: 'Executed'"]  # Return to executed status for retry
       
   completed_index:
     on_entry:

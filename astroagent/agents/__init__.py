@@ -19,6 +19,7 @@ from .common import (
     CompletedProjectSchema,
     load_agent_config,
     create_project_folder,
+    move_project_folder,
     generate_ulid,
     setup_logging
 )
@@ -26,11 +27,10 @@ from .common import (
 from .hypothesis_maker import HypothesisMaker
 from .reviewer import Reviewer
 from .experiment_designer import ExperimentDesigner
-
-# TODO: Import other agents once implemented
-# from .experimenter import Experimenter
-# from .peer_reviewer import PeerReviewer
-# from .reporter import Reporter
+from .experimenter import Experimenter
+from .peer_reviewer import PeerReviewer
+from .reporter import Reporter
+from .lab_technician import LabTechnician
 
 __all__ = [
     # Base classes and schemas
@@ -44,6 +44,7 @@ __all__ = [
     # Utility functions
     'load_agent_config',
     'create_project_folder',
+    'move_project_folder',
     'generate_ulid',
     'setup_logging',
     
@@ -51,11 +52,10 @@ __all__ = [
     'HypothesisMaker',
     'Reviewer',
     'ExperimentDesigner',
-    
-    # TODO: Add other agents
-    # 'Experimenter',
-    # 'PeerReviewer', 
-    # 'Reporter'
+    'Experimenter',
+    'PeerReviewer',
+    'Reporter',
+    'LabTechnician'
 ]
 
 # Agent registry for dynamic loading
@@ -69,15 +69,17 @@ AGENT_REGISTRY = {
     'experiment_designer': ExperimentDesigner,
     'ED': ExperimentDesigner,
     
-    # TODO: Add other agents
-    # 'experimenter': Experimenter,
-    # 'EX': Experimenter,
+    'experimenter': Experimenter,
+    'EX': Experimenter,
     
-    # 'peer_reviewer': PeerReviewer,
-    # 'PR': PeerReviewer,
+    'peer_reviewer': PeerReviewer,
+    'PR': PeerReviewer,
     
-    # 'reporter': Reporter,
-    # 'RP': Reporter,
+    'reporter': Reporter,
+    'RP': Reporter,
+    
+    'lab_technician': LabTechnician,
+    'LT': LabTechnician,
 }
 
 

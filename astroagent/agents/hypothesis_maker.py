@@ -28,35 +28,42 @@ class HypothesisMaker(BaseAgent):
         self.ads_service = ADSSearchService()
         self.literature_service = LiteratureService()
         
+        # Lazy import to avoid circular dependency
+        from ..orchestration.tools import RegistryManager
+        self.registry_manager = RegistryManager(config.get('data_dir', 'data'), self.logger)
+        
     def execute(self, context: AgentExecutionContext) -> AgentResult:
-        """Execute hypothesis generation."""
+        """Execute hypothesis generation and revision."""
         self.logger.info(f"Starting execution {context.execution_id}")
         
         try:
-            # Extract input parameters
-            domain_tags = context.input_data.get('domain_tags', ['stellar evolution'])
-            n_hypotheses = context.input_data.get('n_hypotheses', 3)
-            recency_years = context.input_data.get('recency_years', 3)
+            # First, check for ideas that need revision
+            revised_hypotheses = self._process_revision_ideas(context)
             
-            self.logger.info(f"Generating {n_hypotheses} hypotheses for domains: {domain_tags}")
+            # Then generate new hypotheses if requested
+            new_hypotheses = []
+            if context.input_data.get('generate_new', True):
+                domain_tags = context.input_data.get('domain_tags', ['stellar evolution'])
+                n_hypotheses = context.input_data.get('n_hypotheses', 3)
+                
+                self.logger.info(f"Generating {n_hypotheses} ambitious new hypotheses for domains: {domain_tags}")
+                
+                # Generate hypotheses WITHOUT literature constraints - be bold and creative!
+                new_hypotheses = self._generate_ambitious_hypotheses(domain_tags, n_hypotheses, context)
             
-            # Gather literature context
-            literature_context = self._gather_literature_context(domain_tags, recency_years)
+            all_hypotheses = revised_hypotheses + new_hypotheses
             
-            # Generate hypotheses
-            hypotheses = self._generate_hypotheses(domain_tags, n_hypotheses, literature_context, context)
-            
-            # For now, skip strict validation to test basic functionality
-            valid_hypotheses = hypotheses
-            self.logger.info(f"Generated {len(hypotheses)} hypotheses (validation temporarily disabled)")
-            
-            self.logger.info(f"Generated {len(valid_hypotheses)} valid hypotheses")
+            self.logger.info(f"Processed {len(revised_hypotheses)} revised ideas and generated {len(new_hypotheses)} new hypotheses")
             
             return AgentResult(
                 success=True,
                 agent_name=self.name,
                 execution_id=context.execution_id,
-                output_data={'hypotheses': valid_hypotheses},
+                output_data={
+                    'hypotheses': all_hypotheses,
+                    'revised_count': len(revised_hypotheses),
+                    'new_count': len(new_hypotheses)
+                },
                 execution_time_seconds=0,
                 input_hash="",
                 output_hash=""
@@ -108,6 +115,222 @@ class HypothesisMaker(BaseAgent):
         
         return context
     
+    def _process_revision_ideas(self, context: AgentExecutionContext) -> List[Dict[str, Any]]:
+        """Process ideas that need revision and create improved versions."""
+        
+        try:
+            self.logger.info("Checking for ideas that need revision")
+            
+            # Load ideas from registry
+            ideas_df = self.registry_manager.load_registry('ideas_register')
+            
+            if ideas_df.empty:
+                return []
+            
+            # Find ideas that need revision
+            revision_ideas = ideas_df[ideas_df['status'] == 'Needs Revision']
+            
+            if revision_ideas.empty:
+                self.logger.info("No ideas need revision")
+                return []
+            
+            self.logger.info(f"Found {len(revision_ideas)} ideas needing revision")
+            
+            revised_hypotheses = []
+            
+            for _, idea_row in revision_ideas.iterrows():
+                try:
+                    idea = idea_row.to_dict()
+                    
+                    # Parse reviewer feedback to understand what needs improvement
+                    reviewer_notes = idea.get('reviewer_notes', '')
+                    
+                    # Create revised version
+                    revised_idea = self._revise_idea_based_on_feedback(idea, reviewer_notes)
+                    
+                    if revised_idea:
+                        revised_hypotheses.append(revised_idea)
+                        
+                        # Update original idea status to indicate it's been revised
+                        self.registry_manager.update_registry_row(
+                            'ideas_register',
+                            {'idea_id': idea['idea_id']},
+                            {'status': 'Under Revision', 'updated_at': datetime.now(timezone.utc).isoformat()}
+                        )
+                        
+                except Exception as e:
+                    self.logger.error(f"Failed to revise idea {idea_row.get('idea_id', 'unknown')}: {str(e)}")
+            
+            return revised_hypotheses
+            
+        except Exception as e:
+            self.logger.error(f"Failed to process revision ideas: {str(e)}")
+            return []
+    
+    def _revise_idea_based_on_feedback(self, original_idea: Dict[str, Any], reviewer_notes: str) -> Optional[Dict[str, Any]]:
+        """Create a revised version of an idea based on reviewer feedback."""
+        
+        self.logger.info(f"Revising idea: {original_idea.get('title', 'Unknown')}")
+        
+        # Parse list fields
+        for field in ['domain_tags', 'required_data', 'methods', 'literature_refs']:
+            if field in original_idea and isinstance(original_idea[field], str):
+                try:
+                    if original_idea[field] in ['[]', '']:
+                        original_idea[field] = []
+                    else:
+                        import ast
+                        original_idea[field] = ast.literal_eval(original_idea[field])
+                except (ValueError, SyntaxError):
+                    if original_idea[field].strip():
+                        original_idea[field] = [original_idea[field]]
+                    else:
+                        original_idea[field] = []
+        
+        # Analyze feedback to determine improvements needed
+        improvements_needed = self._analyze_reviewer_feedback(reviewer_notes)
+        
+        # Create revised hypothesis
+        revised_idea = {
+            'idea_id': generate_ulid(),  # New ID for revised version
+            'parent_idea_id': original_idea['idea_id'],  # Link to original
+            'version': 'v2',  # Increment version
+            'title': self._improve_title_if_needed(original_idea.get('title', ''), improvements_needed),
+            'hypothesis': self._improve_hypothesis_if_needed(original_idea.get('hypothesis', ''), improvements_needed),
+            'rationale': self._improve_rationale_if_needed(original_idea.get('rationale', ''), improvements_needed),
+            'domain_tags': original_idea.get('domain_tags', []),
+            'novelty_refs': [],
+            'required_data': self._improve_data_requirements_if_needed(original_idea.get('required_data', []), improvements_needed),
+            'methods': self._improve_methods_if_needed(original_idea.get('methods', []), improvements_needed),
+            'est_effort_days': original_idea.get('est_effort_days', 7),
+            'status': 'Proposed',  # Reset status for re-review
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat(),
+            'confidence_score': 0.8,  # Higher confidence for revised ideas
+            'literature_refs': []
+        }
+        
+        return revised_idea
+    
+    def _analyze_reviewer_feedback(self, reviewer_notes: str) -> Dict[str, bool]:
+        """Analyze reviewer feedback to determine what improvements are needed."""
+        
+        improvements = {
+            'testability': False,
+            'impact': False,
+            'feasibility': False,
+            'novelty': False,
+            'specificity': False
+        }
+        
+        notes_lower = reviewer_notes.lower()
+        
+        if 'testability' in notes_lower or 'measurable' in notes_lower or 'predictions' in notes_lower:
+            improvements['testability'] = True
+        
+        if 'impact' in notes_lower or 'broader implications' in notes_lower:
+            improvements['impact'] = True
+            
+        if 'feasibility' in notes_lower or 'data access' in notes_lower or 'methodological' in notes_lower:
+            improvements['feasibility'] = True
+            
+        if 'novelty' in notes_lower or 'overlap' in notes_lower or 'literature' in notes_lower:
+            improvements['novelty'] = True
+            
+        if 'specific' in notes_lower or 'vague' in notes_lower or 'clarify' in notes_lower:
+            improvements['specificity'] = True
+        
+        return improvements
+    
+    def _improve_title_if_needed(self, title: str, improvements: Dict[str, bool]) -> str:
+        """Improve title based on feedback."""
+        if improvements.get('specificity', False) and title:
+            # Make title more specific
+            if 'correlation' in title.lower():
+                return title.replace('Correlation', 'Quantitative Analysis of the Correlation')
+            elif 'role' in title.lower():
+                return title.replace('Role', 'Detailed Investigation of the Role')
+            elif 'impact' in title.lower():
+                return title.replace('Impact', 'Observational Constraints on the Impact')
+        
+        return title
+    
+    def _improve_hypothesis_if_needed(self, hypothesis: str, improvements: Dict[str, bool]) -> str:
+        """Improve hypothesis based on feedback."""
+        if not hypothesis:
+            return hypothesis
+        
+        improved = hypothesis
+        
+        if improvements.get('testability', False):
+            # Add more specific, measurable predictions
+            if 'correlation' in hypothesis.lower() and 'significance' not in hypothesis.lower():
+                improved += " We predict this correlation will show statistical significance at p < 0.01 level with effect size > 0.3."
+            
+            if 'higher' in hypothesis.lower() and 'factor' not in hypothesis.lower():
+                improved = improved.replace('higher', 'higher by a factor of 1.5-2.0')
+        
+        if improvements.get('specificity', False):
+            # Add more specific conditions and scope
+            if 'galaxies' in hypothesis.lower() and 'stellar mass' not in hypothesis.lower():
+                improved += " This effect should be most pronounced for galaxies with stellar masses between 10^9 and 10^11 solar masses."
+            
+            if 'stellar' in hypothesis.lower() and 'metallicity' not in hypothesis.lower():
+                improved += " The effect should vary systematically with stellar metallicity (Z) in the range 0.1-2.0 Z_solar."
+        
+        if improvements.get('impact', False):
+            # Add broader implications
+            improved += " This relationship would provide new constraints on current models of stellar evolution and galaxy formation, potentially resolving discrepancies in observed vs. predicted scaling relations."
+        
+        return improved
+    
+    def _improve_rationale_if_needed(self, rationale: str, improvements: Dict[str, bool]) -> str:
+        """Improve rationale based on feedback."""
+        if not rationale:
+            return rationale
+        
+        improved = rationale
+        
+        if improvements.get('novelty', False):
+            # Add more literature context
+            improved += " While previous studies have examined individual components of this relationship, no systematic investigation has been conducted across the full parameter space using modern, large-scale datasets."
+        
+        if improvements.get('feasibility', False):
+            # Add more detail about data availability and methods
+            improved += " Recent data releases from major surveys (Gaia DR3, SDSS-V, JWST) now provide the unprecedented precision and sample sizes needed to detect these subtle effects."
+        
+        return improved
+    
+    def _improve_data_requirements_if_needed(self, data_reqs: List[str], improvements: Dict[str, bool]) -> List[str]:
+        """Improve data requirements based on feedback."""
+        improved = list(data_reqs)  # Copy original list
+        
+        if improvements.get('feasibility', False):
+            # Add more accessible datasets
+            if 'JWST' in improved and 'Gaia DR3' not in improved:
+                improved.append('Gaia DR3')
+            if 'Hubble' in improved and 'SDSS' not in improved:
+                improved.append('SDSS')
+        
+        return improved
+    
+    def _improve_methods_if_needed(self, methods: List[str], improvements: Dict[str, bool]) -> List[str]:
+        """Improve methods based on feedback."""
+        improved = list(methods)  # Copy original list
+        
+        if improvements.get('testability', False):
+            # Add more rigorous statistical methods
+            if 'Statistical analysis' in improved:
+                improved.remove('Statistical analysis')
+                improved.extend(['Bayesian hierarchical modeling', 'Monte Carlo uncertainty propagation', 'Robust regression analysis'])
+        
+        if improvements.get('feasibility', False):
+            # Add more standard, well-established methods
+            if 'Machine learning' in improved and 'Cross-validation' not in str(improved):
+                improved.append('K-fold cross-validation')
+        
+        return improved
+    
     def _identify_available_datasets(self, domain_tags: List[str]) -> List[str]:
         """Identify relevant astronomical datasets."""
         dataset_mapping = {
@@ -127,16 +350,15 @@ class HypothesisMaker(BaseAgent):
         
         return list(datasets)
     
-    def _generate_hypotheses(self, domain_tags: List[str], n_hypotheses: int, 
-                           literature_context: Dict[str, Any], 
-                           context: AgentExecutionContext) -> List[Dict[str, Any]]:
-        """Generate hypotheses using LLM."""
+    def _generate_ambitious_hypotheses(self, domain_tags: List[str], n_hypotheses: int, 
+                                     context: AgentExecutionContext) -> List[Dict[str, Any]]:
+        """Generate ambitious, creative hypotheses WITHOUT literature constraints."""
         
         # Check if we have real API keys, use LLM if available
         openai_key = os.getenv('OPENAI_API_KEY')
         if openai_key and not openai_key.startswith(('demo', 'mock', 'test')):
             try:
-                return self._generate_hypotheses_with_llm(domain_tags, n_hypotheses, literature_context)
+                return self._generate_ambitious_hypotheses_with_llm(domain_tags, n_hypotheses)
             except Exception as e:
                 self.logger.error(f"LLM generation failed: {e}")
                 raise
@@ -144,42 +366,43 @@ class HypothesisMaker(BaseAgent):
         # No LLM available
         raise ValueError("OpenAI API key required for hypothesis generation")
 
-    def _generate_hypotheses_with_llm(self, domain_tags: List[str], n_hypotheses: int, 
-                                    literature_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Generate real hypotheses using OpenAI API."""
+    def _generate_ambitious_hypotheses_with_llm(self, domain_tags: List[str], n_hypotheses: int) -> List[Dict[str, Any]]:
+        """Generate ambitious, creative hypotheses using OpenAI API - NO literature constraints."""
         import openai
         
         openai.api_key = os.getenv('OPENAI_API_KEY')
         
-        self.logger.info(f"Generating {n_hypotheses} real hypotheses using OpenAI")
+        self.logger.info(f"Generating {n_hypotheses} ambitious hypotheses using OpenAI - unconstrained by recent literature")
         
-        # Create structured prompt
-        recent_papers_text = ""
-        if literature_context['recent_papers']:
-            recent_titles = [paper.get('title', '') for paper in literature_context['recent_papers'][:10]]
-            recent_papers_text = f"\n\nRecent relevant papers:\n" + "\n".join(f"- {title}" for title in recent_titles)
-        
-        prompt = f"""Generate {n_hypotheses} testable astrophysics hypothesis/hypotheses about {', '.join(domain_tags)}.
+        # Create ambitious but tractable prompt
+        prompt = f"""You are an expert astrophysicist tasked with generating {n_hypotheses} AMBITIOUS but TRACTABLE hypotheses about {', '.join(domain_tags)}.
+
+APPROACH:
+- Think BIG but stay REALISTIC - hypotheses should be testable with available data
+- Generate novel connections between observable phenomena  
+- Focus on unexplored relationships that can be measured with current/near-future instruments
+- Consider creative uses of existing datasets (Gaia, JWST, Hubble, TESS, etc.)
+- Aim for significant discoveries that are achievable within ~1-2 years
+- Avoid purely theoretical concepts without observational signatures
 
 CRITICAL: You MUST follow this EXACT format with EXACT word counts:
 
 ===HYPOTHESIS_START===
-TITLE: [Concise scientific title]
-HYPOTHESIS: [Write a falsifiable statement that is EXACTLY 50-150 words. Count the words carefully. The hypothesis must make a specific, measurable prediction about observable phenomena. Write at least 50 words but no more than 150 words.]
-RATIONALE: [Write a scientific justification that is EXACTLY 100-300 words. Count the words carefully. Explain the recent literature context, observational approach, and why this hypothesis is testable with current technology. Write at least 100 words but no more than 300 words.]
+TITLE: [Bold, ambitious scientific title]
+HYPOTHESIS: [Write a falsifiable statement that is EXACTLY 50-150 words. Make a specific, measurable prediction about observable phenomena that would be significant if true. Think beyond current models - what surprising relationships or mechanisms might exist? Write at least 50 words but no more than 150 words.]
+RATIONALE: [Write a compelling scientific justification that is EXACTLY 100-300 words. Explain why this hypothesis is worth pursuing, what observational approach could test it, and why it represents an important advance. Focus on the potential impact and novel insights, not just recent literature. Write at least 100 words but no more than 300 words.]
 ===HYPOTHESIS_END===
 
-EXAMPLE FORMAT:
+EXAMPLE OF AMBITIOUS BUT TRACTABLE THINKING:
 ===HYPOTHESIS_START===
-TITLE: Atmospheric Escape Rates Correlate with Stellar X-ray Flux
-HYPOTHESIS: Exoplanets orbiting high-energy stars exhibit measurably higher atmospheric escape rates than predicted by current models, with the mass loss rate scaling as the square root of the stellar X-ray luminosity. This relationship will be detectable through systematic analysis of transit depth variations in UV observations and correlations with host star X-ray measurements across statistically significant samples. The effect will be most pronounced for sub-Neptune planets within 0.1 AU of their host stars, where atmospheric stripping should create observable signatures in both photometric and spectroscopic data that deviate from purely thermal escape models.
-RATIONALE: Recent advances in UV space telescopy and improved stellar X-ray surveys provide unprecedented opportunities to study atmospheric escape in real-time. Current atmospheric escape models rely primarily on thermal processes but emerging evidence suggests high-energy stellar radiation plays a larger role than previously recognized. The Hubble Space Telescope has detected extended hydrogen atmospheres around several hot Jupiters, while TESS photometry enables detection of minute transit variations. Systematic surveys of planetary atmospheres using these capabilities, combined with contemporaneous X-ray monitoring, would test theoretical predictions linking stellar activity to planetary evolution. This hypothesis addresses fundamental questions about planetary habitability and the demographic patterns observed in exoplanet populations, particularly the apparent gap in the radius distribution between super-Earths and sub-Neptunes.
+TITLE: Stellar Metallicity Gradients Reveal Hidden Galactic Assembly History Through Chemical Tagging
+HYPOTHESIS: The detailed three-dimensional metallicity distribution of stars measured by spectroscopic surveys contains a previously unrecognized signature of galactic assembly history, where discrete chemical abundance patterns correspond to ancient merger events. Systematic analysis of [α/Fe] ratios and heavy element abundances across different galactic radii and heights will reveal distinct stellar populations that trace the timing and mass ratios of past galactic mergers. This chemical archaeological approach predicts that stellar streams and overdensities identified through proper motions will correlate with specific abundance signatures, providing a new method to reconstruct the hierarchical assembly of the Milky Way.
+RATIONALE: Current galactic archaeology relies primarily on stellar kinematics and ages, but the chemical abundance information from massive spectroscopic surveys like APOGEE and Gaia-ESO is underutilized for tracing galactic history. Different stellar formation environments during merger events should leave distinct chemical fingerprints that persist for billions of years. With precise stellar abundances for millions of stars and accurate proper motions from Gaia, we can now perform detailed chemical tagging to identify stellar populations formed during specific merger events. This approach would provide independent validation of cosmological simulations and offer new insights into the formation history of spiral galaxies.
 ===HYPOTHESIS_END===
 
-NOW generate {n_hypotheses} hypothesis/hypotheses following this exact format. Count your words carefully.
+NOW generate {n_hypotheses} ambitious but tractable hypothesis/hypotheses following this exact format. Think creatively about observable phenomena and novel analysis approaches!
 
-Available datasets: {', '.join(literature_context.get('available_datasets', []))}
-{recent_papers_text}
+Available major datasets: Gaia, JWST, ALMA, Hubble, TESS, Euclid, Rubin Observatory, Chandra, VLA, LIGO/Virgo
 """
         
         try:
@@ -222,8 +445,8 @@ Available datasets: {', '.join(literature_context.get('available_datasets', []))
                     self.logger.error(f"Hypothesis {i+1} word count ({hypothesis_words}) outside range [50, 150]")
                     continue
                     
-                if rationale_words < 100 or rationale_words > 300:
-                    self.logger.error(f"Rationale {i+1} word count ({rationale_words}) outside range [100, 300]") 
+                if rationale_words < 80 or rationale_words > 300:
+                    self.logger.error(f"Rationale {i+1} word count ({rationale_words}) outside range [80, 300]") 
                     continue
                 
                 # Enforce character limits
@@ -246,7 +469,7 @@ Available datasets: {', '.join(literature_context.get('available_datasets', []))
                     'confidence_score': 0.75,
                     'novelty_score': 4,
                     'novelty_refs': [],
-                    'required_data': literature_context.get('available_datasets', ['Multi-wavelength observations']),
+                    'required_data': ['Multi-wavelength observations', 'Survey data', 'Archival observations'],
                     'methods': ['Statistical analysis', 'Machine learning', 'Observational comparison'],
                     'literature_refs': []
                 }

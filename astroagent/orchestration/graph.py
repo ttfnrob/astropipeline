@@ -57,6 +57,35 @@ class PipelineState(TypedDict):
 
 
 # ============================================================================
+# Utility Functions 
+# ============================================================================
+
+def apply_registry_updates(registry_updates: List[Dict[str, Any]], registry_manager: RegistryManager):
+    """Apply registry updates from agent results."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    
+    for update in registry_updates:
+        try:
+            registry_name = update.get('registry')
+            action = update.get('action', 'update')
+            filter_criteria = update.get('filter', {})
+            data = update.get('data', {})
+            
+            if action == 'update':
+                registry_manager.update_registry_row(registry_name, filter_criteria, data)
+                logger.info(f"Applied registry update: {registry_name}")
+            elif action == 'append':
+                registry_manager.append_to_registry(registry_name, data)
+                logger.info(f"Applied registry append: {registry_name}")
+            else:
+                logger.warning(f"Unknown registry action: {action}")
+                
+        except Exception as e:
+            logger.error(f"Failed to apply registry update: {e}")
+
+
+# ============================================================================
 # Agent Node Functions
 # ============================================================================
 
@@ -238,6 +267,196 @@ def experiment_designer_node(state: PipelineState) -> PipelineState:
         return state
 
 
+def experimenter_node(state: PipelineState) -> PipelineState:
+    """Execute Experimenter agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Experimenter")
+    
+    try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
+        # Create agent
+        agent = create_agent('experimenter', config_dir)
+        
+        # Get ready project to execute
+        idea_id = state.get('current_idea_id')
+        
+        context = AgentExecutionContext(
+            agent_name='experimenter',
+            state_name='experiment_execution',
+            previous_state=state.get('previous_state'),
+            input_data={'idea_id': idea_id} if idea_id else {},
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Apply registry updates from agent result
+        if result.success and result.registry_updates:
+            config_dir = state.get('config_dir', 'astroagent/config')
+            # Create registry manager instance (we need the data_dir from config)
+            registry_manager = RegistryManager(data_dir="data")
+            apply_registry_updates(result.registry_updates, registry_manager)
+        
+        # Update state
+        state['agent_outputs']['experimenter'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            # Move to peer review after successful experiment
+            state['current_state'] = 'peer_review'
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'experimenter',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Experimenter execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'experimenter',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
+def peer_reviewer_node(state: PipelineState) -> PipelineState:
+    """Execute Peer Reviewer agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Peer Reviewer")
+    
+    try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
+        # Create agent
+        agent = create_agent('peer_reviewer', config_dir)
+        
+        # Get project to review
+        idea_id = state.get('current_idea_id')
+        
+        context = AgentExecutionContext(
+            agent_name='peer_reviewer',
+            state_name='peer_review',
+            previous_state=state.get('previous_state'),
+            input_data={'idea_id': idea_id} if idea_id else {},
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Apply registry updates from agent result
+        if result.success and result.registry_updates:
+            registry_manager = RegistryManager(data_dir="data")
+            apply_registry_updates(result.registry_updates, registry_manager)
+        
+        # Update state
+        state['agent_outputs']['peer_reviewer'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            # Check if peer review approved the work
+            approved = result.output_data.get('approved', False)
+            if approved:
+                state['current_state'] = 'report_generation'
+            else:
+                # Changes requested - back to experimenter
+                state['current_state'] = 'experiment_execution'
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'peer_reviewer',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Peer Reviewer execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'peer_reviewer',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
+def reporter_node(state: PipelineState) -> PipelineState:
+    """Execute Reporter agent."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Executing Reporter")
+    
+    try:
+        # Get config directory from state or use default
+        config_dir = state.get('config_dir', 'astroagent/config')
+        
+        # Create agent
+        agent = create_agent('reporter', config_dir)
+        
+        # Get approved project to report
+        idea_id = state.get('current_idea_id')
+        
+        context = AgentExecutionContext(
+            agent_name='reporter',
+            state_name='report_generation',
+            previous_state=state.get('previous_state'),
+            input_data={'idea_id': idea_id} if idea_id else {},
+            retry_count=state.get('retry_count', 0)
+        )
+        
+        # Execute agent
+        result = agent.run(context)
+        
+        # Apply registry updates from agent result
+        if result.success and result.registry_updates:
+            registry_manager = RegistryManager(data_dir="data")
+            apply_registry_updates(result.registry_updates, registry_manager)
+        
+        # Update state
+        state['agent_outputs']['reporter'] = result.output_data
+        state['total_agents_run'] += 1
+        state['previous_state'] = state['current_state']
+        
+        if result.success:
+            # Project completed and moved to library
+            state['current_state'] = 'library'
+        else:
+            state['current_state'] = 'error'
+            state['errors'].append({
+                'agent': 'reporter',
+                'error': result.error_message,
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            })
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"Reporter execution failed: {str(e)}")
+        state['current_state'] = 'error'
+        state['errors'].append({
+            'agent': 'reporter',
+            'error': str(e),
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        return state
+
+
 def archive_node(state: PipelineState) -> PipelineState:
     """Archive rejected or completed work."""
     
@@ -246,6 +465,18 @@ def archive_node(state: PipelineState) -> PipelineState:
     
     # Mark pipeline as completed
     state['current_state'] = 'archived'
+    
+    return state
+
+
+def library_node(state: PipelineState) -> PipelineState:
+    """Final successful completion - project in library."""
+    
+    logger = logging.getLogger('astroagent.orchestration.graph')
+    logger.info("Project completed and moved to library")
+    
+    # Mark pipeline as successfully completed
+    state['current_state'] = 'completed'
     
     return state
 
@@ -305,11 +536,52 @@ def route_from_experiment_designer(state: PipelineState) -> str:
     current_state = state.get('current_state', '')
     
     if current_state == 'experiment_execution':
-        return 'archive'  # Simplified - would go to experimenter
+        return 'experimenter'  # Route to experimenter when ready
     elif current_state == 'ready_check_failed':
         return 'archive'  # Would normally loop back to design
     elif current_state == 'error':
         return 'error'
+    else:
+        return 'error'
+
+
+def route_from_experimenter(state: PipelineState) -> str:
+    """Route from experimenter."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'peer_review':
+        return 'peer_reviewer'  # Move to peer review after successful experiment
+    elif current_state == 'error':
+        return 'error'
+    
+    else:
+        return 'error'
+
+
+def route_from_peer_reviewer(state: PipelineState) -> str:
+    """Route from peer reviewer."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'report_generation':
+        return 'reporter'  # Approved work goes to reporter
+    elif current_state == 'experiment_execution':
+        return 'experimenter'  # Changes requested - back to experimenter
+    elif current_state == 'error':
+        return 'error'
+    
+    else:
+        return 'error'
+
+
+def route_from_reporter(state: PipelineState) -> str:
+    """Route from reporter."""
+    current_state = state.get('current_state', '')
+    
+    if current_state == 'library':
+        return 'library'  # Completed work goes to library
+    elif current_state == 'error':
+        return 'error'
+    
     else:
         return 'error'
 
@@ -328,6 +600,10 @@ def create_pipeline_graph() -> StateGraph:
     workflow.add_node("hypothesis_maker", hypothesis_maker_node)
     workflow.add_node("reviewer", reviewer_node)
     workflow.add_node("experiment_designer", experiment_designer_node)
+    workflow.add_node("experimenter", experimenter_node)
+    workflow.add_node("peer_reviewer", peer_reviewer_node)
+    workflow.add_node("reporter", reporter_node)
+    workflow.add_node("library", library_node)
     workflow.add_node("archive", archive_node)
     workflow.add_node("error", error_node)
     
@@ -358,12 +634,42 @@ def create_pipeline_graph() -> StateGraph:
         "experiment_designer",
         route_from_experiment_designer,
         {
+            "experimenter": "experimenter",
             "archive": "archive",
             "error": "error"
         }
     )
     
+    workflow.add_conditional_edges(
+        "experimenter",
+        route_from_experimenter,
+        {
+            "peer_reviewer": "peer_reviewer",
+            "error": "error"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "peer_reviewer",
+        route_from_peer_reviewer,
+        {
+            "reporter": "reporter",
+            "experimenter": "experimenter",
+            "error": "error"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "reporter",
+        route_from_reporter,
+        {
+            "library": "library",
+            "error": "error"
+        }
+    )
+    
     # Terminal states
+    workflow.add_edge("library", END)
     workflow.add_edge("archive", END)
     workflow.add_edge("error", END)
     

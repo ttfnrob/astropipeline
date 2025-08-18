@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Data fetching script for project: Mock Approved Idea
+Data fetching script for project: Probing Stellar Evolution Using Exoplanet-Induced Stellar Activity
 """
 
 import argparse
@@ -13,7 +13,7 @@ from pathlib import Path
 def fetch_data(output_dir: Path):
     """Fetch required datasets."""
     
-    required_data = ['Gaia DR3', 'SDSS']
+    required_data = ['Multi-wavelength observations', 'Survey data', 'Archival observations']
     
     print(f"Fetching data: {', '.join(required_data)}")
     

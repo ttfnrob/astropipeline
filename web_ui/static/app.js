@@ -31,12 +31,12 @@ class PipelineMonitor {
             });
         });
         
-        // Pipeline form submission
-        const pipelineForm = document.getElementById('pipeline-form');
-        if (pipelineForm) {
-            pipelineForm.addEventListener('submit', (e) => {
+        // Continuous form submission
+        const continuousForm = document.getElementById('continuous-form');
+        if (continuousForm) {
+            continuousForm.addEventListener('submit', (e) => {
                 e.preventDefault();
-                this.startPipeline();
+                this.startContinuousResearch();
             });
         }
         
@@ -143,11 +143,14 @@ class PipelineMonitor {
             this.updateStatusCards(status);
             this.updatePipelineStatus(status);
             
-            // Load ideas using enhanced table
-            await this.loadIdeasTable();
+            // Load ideas using standard table
+            await this.loadIdeas();
             
             // Load projects
             await this.loadProjects();
+            
+            // Load agent status
+            await this.loadAgentStatus();
             
             // Load statistics
             await this.loadStatistics();
@@ -188,8 +191,8 @@ class PipelineMonitor {
             document.getElementById('total-projects').textContent = data.total_projects;
         }
         
-        if (data.recent_ideas_30d !== undefined) {
-            document.getElementById('recent-activity').textContent = data.recent_ideas_30d;
+        if (data.completed_projects !== undefined) {
+            document.getElementById('completed-projects').textContent = data.completed_projects;
         }
         
         // Update charts if statistics changed
@@ -199,51 +202,93 @@ class PipelineMonitor {
     }
     
     updateStatusCards(status) {
-        document.getElementById('active-pipelines').textContent = status.active_pipelines;
-        document.getElementById('total-ideas').textContent = status.total_ideas;
-        document.getElementById('total-projects').textContent = status.total_projects;
+        // Update system status
+        const systemStatusEl = document.getElementById('system-status');
+        if (systemStatusEl && status.pipeline_state) {
+            systemStatusEl.textContent = status.pipeline_state;
+        }
         
-        // Calculate recent activity from the received data
-        if (status.recent_activity) {
-            document.getElementById('recent-activity').textContent = status.recent_activity.length;
+        // Update total ideas
+        const totalIdeasEl = document.getElementById('total-ideas');
+        if (totalIdeasEl && status.total_ideas !== undefined) {
+            totalIdeasEl.textContent = status.total_ideas;
+        }
+        
+        // Update total projects
+        const totalProjectsEl = document.getElementById('total-projects');
+        if (totalProjectsEl && status.total_projects !== undefined) {
+            totalProjectsEl.textContent = status.total_projects;
+        }
+        
+        // Update completed projects
+        const completedProjectsEl = document.getElementById('completed-projects');
+        if (completedProjectsEl && status.completed_projects !== undefined) {
+            completedProjectsEl.textContent = status.completed_projects;
         }
     }
     
-    updateAgentStatus(agentStatus) {
-        Object.entries(agentStatus).forEach(([agentName, status]) => {
-            const agentElement = document.getElementById(agentName);
-            if (agentElement) {
-                const statusElement = agentElement.querySelector('.agent-status');
-                const detailsElement = agentElement.querySelector('.last-activity');
-                
-                // Update status
-                statusElement.className = `agent-status ${status}`;
-                statusElement.textContent = status.replace('_', ' ').toUpperCase();
-                
-                // Update last activity (simplified)
-                const lastActivity = status === 'idle' ? 'Never' : 'Recently';
-                detailsElement.textContent = `Last active: ${lastActivity}`;
-            }
-        });
-    }
+
     
     async loadIdeas() {
         try {
-            const response = await this.fetchAPI('/api/ideas');
-            const ideas = response.ideas;
+            // Get current filter/sort values from UI controls
+            const searchInput = document.getElementById('ideas-search');
+            const statusFilter = document.getElementById('ideas-status-filter');
+            const sortSelect = document.getElementById('ideas-sort');
+            const sortOrderSelect = document.getElementById('ideas-sort-order');
+            const limitSelect = document.getElementById('ideas-limit');
+            
+            // Build query parameters
+            const params = new URLSearchParams();
+            
+            if (limitSelect && limitSelect.value) {
+                params.append('limit', limitSelect.value);
+            }
+            
+            if (statusFilter && statusFilter.value && statusFilter.value !== 'all') {
+                params.append('status', statusFilter.value);
+            }
+            
+            if (sortSelect && sortSelect.value) {
+                params.append('sort_by', sortSelect.value);
+            }
+            
+            if (sortOrderSelect && sortOrderSelect.value) {
+                params.append('sort_order', sortOrderSelect.value);
+            }
+            
+            if (searchInput && searchInput.value.trim()) {
+                params.append('search', searchInput.value.trim());
+            }
+            
+            // Make API call with parameters
+            const url = '/api/ideas' + (params.toString() ? '?' + params.toString() : '');
+            const response = await this.fetchAPI(url);
+            const ideas = response.ideas || [];
+            const total = response.total || 0;
             
             const tbody = document.getElementById('ideas-table-body');
             tbody.innerHTML = '';
             
             if (ideas.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="6" class="loading">No ideas found</td></tr>';
-                return;
+            } else {
+                ideas.forEach(idea => {
+                    const row = this.createIdeaRow(idea);
+                    tbody.appendChild(row);
+                });
             }
             
-            ideas.forEach(idea => {
-                const row = this.createIdeaRow(idea);
-                tbody.appendChild(row);
-            });
+            // Update table info
+            const tableInfo = document.getElementById('ideas-table-info');
+            if (tableInfo) {
+                const showing = ideas.length;
+                const limit = limitSelect ? parseInt(limitSelect.value) : 20;
+                tableInfo.textContent = `Showing ${showing} of ${total} ideas (limit: ${limit})`;
+            }
+            
+            // Update sort header indicators
+            this.updateSortHeaders();
             
         } catch (error) {
             console.error('Error loading ideas:', error);
@@ -258,15 +303,22 @@ class PipelineMonitor {
         // Format data
         const title = idea.title || 'Untitled';
         const status = idea.status || 'Unknown';
+        const currentAgent = idea.current_agent || 'none';
+        const agentDisplayName = this.formatAgentName(currentAgent);
         const score = idea.total_score ? `${idea.total_score}/20` : 'N/A';
         const tags = Array.isArray(idea.domain_tags) ? idea.domain_tags : [];
-        const effort = idea.est_effort_days ? `${idea.est_effort_days} days` : 'N/A';
+
         const created = idea.created_at ? 
             new Date(idea.created_at).toLocaleDateString() : 'N/A';
         
         row.innerHTML = `
             <td title="${title}">${title.length > 50 ? title.substring(0, 47) + '...' : title}</td>
-            <td><span class="status-badge-table ${status.toLowerCase().replace(' ', '-')}">${status}</span></td>
+            <td><span class="status-badge-table ${status ? status.toLowerCase().replace(' ', '-') : 'unknown'}">${status || 'Unknown'}</span></td>
+            <td>
+                <span class="agent-badge ${currentAgent}" title="Current agent handling this idea">
+                    ${agentDisplayName}
+                </span>
+            </td>
             <td>${score}</td>
             <td>
                 <div class="tags">
@@ -274,11 +326,42 @@ class PipelineMonitor {
                     ${tags.length > 3 ? `<span class="tag">+${tags.length - 3}</span>` : ''}
                 </div>
             </td>
-            <td>${effort}</td>
             <td>${created}</td>
         `;
         
+        // Add click handler for modal
+        row.style.cursor = 'pointer';
+        row.className = 'table-row clickable';
+        row.addEventListener('click', () => {
+            this.showIdeaModal(idea);
+        });
+        
         return row;
+    }
+    
+    formatAgentName(agentKey) {
+        const agentNames = {
+            'hypothesis_maker': 'Hypothesis Maker',
+            'reviewer': 'Reviewer', 
+            'experiment_designer': 'Experiment Designer',
+            'experimenter': 'Experimenter',
+            'peer_reviewer': 'Peer Reviewer',
+            'reporter': 'Reporter',
+            'none': 'None'
+        };
+        return agentNames[agentKey] || agentKey.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    }
+    
+    escapeHtml(unsafe) {
+        if (typeof unsafe !== 'string') {
+            return String(unsafe || '');
+        }
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
     
     async loadProjects() {
@@ -326,6 +409,122 @@ class PipelineMonitor {
         `;
         
         return row;
+    }
+    
+    async loadCompletedProjects() {
+        try {
+            const response = await this.fetchAPI('/api/completed-projects');
+            const completedProjects = response.completed_projects || [];
+            
+            const tbody = document.getElementById('completed-table-body');
+            if (!tbody) return;
+            
+            if (completedProjects.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="no-data">No completed projects found</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = completedProjects.map(project => {
+                // Check if project has required files
+                const hasPaper = project.has_paper || false;
+                const hasPeerReview = project.has_peer_review || false;
+                
+                return `
+                    <tr class="table-row">
+                        <td class="project-title">
+                            <div class="project-title-main">${this.escapeHtml(project.title || project.idea_id)}</div>
+                            <div class="project-subtitle">${this.escapeHtml(project.idea_id)}</div>
+                        </td>
+                        <td class="project-path">
+                            <code>${this.escapeHtml(project.project_path || 'N/A')}</code>
+                        </td>
+                        <td class="status-cell">
+                            <span class="status-badge ${hasPaper ? 'complete' : 'missing'}">
+                                ${hasPaper ? '✓ Yes' : '✗ No'}
+                            </span>
+                        </td>
+                        <td class="status-cell">
+                            <span class="status-badge ${hasPeerReview ? 'complete' : 'missing'}">
+                                ${hasPeerReview ? '✓ Yes' : '✗ No'}
+                            </span>
+                        </td>
+                        <td class="status-cell">
+                            ${project.has_html ? 
+                                `<a href="${project.paper_url}" target="_blank" class="paper-link">📄 View Paper</a>` : 
+                                '<span class="status-badge missing">❌ No Paper</span>'}
+                        </td>
+                        <td class="date-cell">
+                            ${project.moved_to_library_at ? new Date(project.moved_to_library_at).toLocaleDateString() : 'N/A'}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+            
+        } catch (error) {
+            console.error('Error loading completed projects:', error);
+            const tbody = document.getElementById('completed-table-body');
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="5" class="error">Error loading completed projects</td></tr>';
+            }
+        }
+    }
+    
+    async loadAgentStatus() {
+        try {
+            const response = await this.fetchAPI('/api/agents');
+            const agents = response.agents || {};
+            this.updateAgentStatus(agents);
+        } catch (error) {
+            console.error('Error loading agent status:', error);
+        }
+    }
+    
+    updateAgentStatus(agents) {
+        // Update each agent card
+        if (!agents || typeof agents !== 'object') {
+            console.warn('Invalid agents data received:', agents);
+            return;
+        }
+        
+        Object.keys(agents).forEach(agentKey => {
+            const agent = agents[agentKey];
+            const agentCard = document.getElementById(agentKey);
+            
+            if (agentCard && agent) {
+                // Update status
+                const statusEl = agentCard.querySelector('.agent-status');
+                if (statusEl && agent.status) {
+                    const status = typeof agent.status === 'string' ? agent.status : 'idle';
+                    statusEl.className = `agent-status ${status}`;
+                    statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+                }
+                
+                // Update current project
+                const projectEl = agentCard.querySelector('.current-project');
+                if (projectEl) {
+                    if (agent.current_idea_title) {
+                        const title = this.escapeHtml(agent.current_idea_title.substring(0, 30));
+                        projectEl.innerHTML = `Project: <span title="${agent.current_idea_id || ''}">${title}...</span>`;
+                    } else {
+                        projectEl.textContent = 'Project: None';
+                    }
+                }
+                
+                // Update last activity
+                const activityEl = agentCard.querySelector('.last-activity');
+                if (activityEl) {
+                    const lastActivity = agent.last_activity || 'Never';
+                    activityEl.textContent = `Last active: ${lastActivity}`;
+                }
+                
+                // Update execution stats
+                const statsEl = agentCard.querySelector('.execution-stats');
+                if (statsEl) {
+                    const projectCount = agent.current_projects ? agent.current_projects.length : 0;
+                    statsEl.textContent = `${projectCount} projects queued`;
+                }
+            }
+        });
     }
     
     async loadStatistics() {
@@ -420,9 +619,13 @@ class PipelineMonitor {
         switch (tabName) {
             case 'ideas':
                 this.loadIdeas();
+                this.loadAgentStatus(); // Also load agent status for current agent column
                 break;
             case 'projects':
                 this.loadProjects();
+                break;
+            case 'completed':
+                this.loadCompletedProjects();
                 break;
             case 'statistics':
                 this.loadStatistics();
@@ -437,7 +640,7 @@ class PipelineMonitor {
         const agentInputs = {
             domain_tags: formData.get('domain-tags').split(',').map(tag => tag.trim()),
             n_hypotheses: parseInt(formData.get('n-hypotheses')),
-            recency_years: parseInt(formData.get('recency-years'))
+            ambition_level: formData.get('ambition-level') || 'significant'
         };
         
         try {
@@ -455,6 +658,11 @@ class PipelineMonitor {
                 data: response,
                 timestamp: new Date().toISOString()
             });
+            
+            // Immediately refresh the UI to show active state
+            setTimeout(() => {
+                this.loadInitialData();
+            }, 1000);
             
         } catch (error) {
             console.error('Error starting pipeline:', error);
@@ -503,6 +711,7 @@ class PipelineMonitor {
         setTimeout(() => {
             this.loadIdeas();
             this.loadProjects();
+            this.loadAgentStatus();
             this.loadStatistics();
         }, 1000);
     }
@@ -579,13 +788,36 @@ class PipelineMonitor {
     
     // Pipeline Control Methods
     setupPipelineControls() {
+        // Setup dropdown functionality
+        const controlDropdownBtn = document.getElementById('control-dropdown-btn');
+        const controlDropdown = document.getElementById('control-dropdown');
+        
+        if (controlDropdownBtn) {
+            controlDropdownBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const dropdown = controlDropdownBtn.parentElement;
+                dropdown.classList.toggle('active');
+            });
+        }
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', () => {
+            const dropdown = document.querySelector('.dropdown');
+            if (dropdown) {
+                dropdown.classList.remove('active');
+            }
+        });
+        
         const pauseResumeBtn = document.getElementById('pause-resume-btn');
         const stopBtn = document.getElementById('stop-btn');
+        const killRogueBtn = document.getElementById('kill-rogue-btn');
         
         if (pauseResumeBtn) {
             pauseResumeBtn.addEventListener('click', () => {
                 const action = pauseResumeBtn.classList.contains('pause-btn') ? 'pause' : 'resume';
                 this.controlPipeline(action);
+                // Close dropdown
+                document.querySelector('.dropdown').classList.remove('active');
             });
         }
         
@@ -593,6 +825,18 @@ class PipelineMonitor {
             stopBtn.addEventListener('click', () => {
                 if (confirm('Are you sure you want to stop the continuous pipeline?')) {
                     this.controlPipeline('stop');
+                    // Close dropdown
+                    document.querySelector('.dropdown').classList.remove('active');
+                }
+            });
+        }
+        
+        if (killRogueBtn) {
+            killRogueBtn.addEventListener('click', () => {
+                if (confirm('Kill all rogue pipeline processes and reset corrupted data?')) {
+                    this.killRogueProcesses();
+                    // Close dropdown
+                    document.querySelector('.dropdown').classList.remove('active');
                 }
             });
         }
@@ -631,6 +875,68 @@ class PipelineMonitor {
         }, 500);
     }
     
+    async killRogueProcesses() {
+        try {
+            const killBtn = document.getElementById('kill-rogue-btn');
+            const originalText = killBtn.innerHTML;
+            
+            // Show loading state
+            killBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Killing...';
+            killBtn.disabled = true;
+            
+            const response = await fetch('/api/pipeline/kill-rogue', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                this.addActivityLogEntry({
+                    type: 'success',
+                    data: { message: '🔥 Rogue processes eliminated!' }
+                });
+                
+                // Show detailed results
+                let details = [];
+                if (result.killed_start_processes) details.push('start.py processes killed');
+                if (result.killed_pipeline_processes) details.push('pipeline processes killed');
+                if (result.reset_corrupted_registry) details.push('corrupted registry reset');
+                
+                if (details.length > 0) {
+                    this.addActivityLogEntry({
+                        type: 'info',
+                        data: { message: `Details: ${details.join(', ')}` }
+                    });
+                }
+                
+                // Refresh the data after cleanup
+                setTimeout(() => {
+                    this.loadInitialData();
+                }, 1000);
+                
+            } else {
+                this.addActivityLogEntry({
+                    type: 'error',
+                    data: { message: 'Failed to kill rogue processes' }
+                });
+            }
+        } catch (error) {
+            console.error('Error killing rogue processes:', error);
+            this.addActivityLogEntry({
+                type: 'error',
+                data: { message: `Error killing rogue processes: ${error.message}` }
+            });
+        } finally {
+            // Restore button
+            const killBtn = document.getElementById('kill-rogue-btn');
+            killBtn.innerHTML = '<i class="fas fa-skull"></i> Kill Rogue Processes';
+            killBtn.disabled = false;
+        }
+    }
+    
     // Table Functionality
     setupTableControls() {
         // Ideas table controls
@@ -650,7 +956,7 @@ class PipelineMonitor {
             searchInput.addEventListener('input', () => {
                 clearTimeout(searchTimeout);
                 searchTimeout = setTimeout(() => {
-                    this.loadIdeasTable();
+                    this.loadIdeas();
                 }, 300);
             });
         }
@@ -659,7 +965,7 @@ class PipelineMonitor {
         [statusFilter, sortSelect, sortOrderSelect, limitSelect].forEach(control => {
             if (control) {
                 control.addEventListener('change', () => {
-                    this.loadIdeasTable();
+                    this.loadIdeas();
                 });
             }
         });
@@ -686,91 +992,13 @@ class PipelineMonitor {
                 sortOrderSelect.value = 'desc';
             }
             
-            this.loadIdeasTable();
+            this.loadIdeas();
         }
     }
     
-    async loadIdeasTable() {
-        const searchInput = document.getElementById('ideas-search');
-        const statusFilter = document.getElementById('ideas-status-filter');
-        const sortSelect = document.getElementById('ideas-sort');
-        const sortOrderSelect = document.getElementById('ideas-sort-order');
-        const limitSelect = document.getElementById('ideas-limit');
-        
-        const params = new URLSearchParams();
-        
-        if (limitSelect) params.append('limit', limitSelect.value);
-        if (statusFilter && statusFilter.value !== 'all') params.append('status', statusFilter.value);
-        if (sortSelect) params.append('sort_by', sortSelect.value);
-        if (sortOrderSelect) params.append('sort_order', sortOrderSelect.value);
-        if (searchInput && searchInput.value.trim()) params.append('search', searchInput.value.trim());
-        
-        try {
-            const response = await fetch(`/api/ideas?${params}`);
-            const data = await response.json();
-            
-            this.updateIdeasTable(data.ideas || []);
-            this.updateTableInfo(data.total || 0, data.filtered || 0);
-            this.updateSortHeaders();
-            
-        } catch (error) {
-            console.error('Error loading ideas table:', error);
-            document.getElementById('ideas-table-body').innerHTML = 
-                '<tr><td colspan="6" class="error">Error loading ideas</td></tr>';
-        }
-    }
+
     
-    updateIdeasTable(ideas) {
-        const tbody = document.getElementById('ideas-table-body');
-        if (!tbody) return;
-        
-        if (ideas.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty">No ideas found</td></tr>';
-            return;
-        }
-        
-        tbody.innerHTML = ideas.map((idea, index) => {
-            const domains = Array.isArray(idea.domain_tags) ? idea.domain_tags : [];
-            const effort = idea.est_effort_days || idea.effort_estimate_days || '-';
-            const score = idea.total_score || '-';
-            const created = idea.created_at ? new Date(idea.created_at).toLocaleDateString() : '-';
-            
-            const statusClass = idea.status ? idea.status.toLowerCase().replace(/\s+/g, '-') : 'unknown';
-            
-            return `
-                <tr data-idea-index="${index}" data-idea-id="${idea.idea_id}">
-                    <td title="${idea.hypothesis || ''}">${this.truncateText(idea.title || 'Untitled', 50)}</td>
-                    <td><span class="status-badge ${statusClass}">${idea.status || 'Unknown'}</span></td>
-                    <td>${score}</td>
-                    <td title="${domains.join(', ')}">${this.truncateText(domains.join(', '), 30)}</td>
-                    <td>${effort} days</td>
-                    <td>${created}</td>
-                </tr>
-            `;
-        }).join('');
-        
-        // Store ideas data for modal use
-        this.currentIdeasData = ideas;
-        
-        // Add click handlers to table rows
-        tbody.querySelectorAll('tr[data-idea-index]').forEach(row => {
-            row.addEventListener('click', () => {
-                const ideaIndex = parseInt(row.getAttribute('data-idea-index'));
-                this.showIdeaModal(ideas[ideaIndex]);
-            });
-        });
-    }
-    
-    updateTableInfo(total, filtered) {
-        const info = document.getElementById('ideas-table-info');
-        if (info) {
-            if (total === filtered) {
-                info.textContent = `Showing ${filtered} of ${total} ideas`;
-            } else {
-                info.textContent = `Showing ${filtered} of ${total} ideas (filtered)`;
-            }
-        }
-    }
+
     
     updateSortHeaders() {
         const sortSelect = document.getElementById('ideas-sort');
@@ -778,17 +1006,29 @@ class PipelineMonitor {
         
         if (!sortSelect || !sortOrderSelect) return;
         
-        // Clear all sort indicators
+        const currentSort = sortSelect.value;
+        const currentOrder = sortOrderSelect.value;
+        
+        // Reset all headers
         document.querySelectorAll('.sortable-header').forEach(header => {
             header.classList.remove('sorting-asc', 'sorting-desc');
+            const icon = header.querySelector('i');
+            if (icon) {
+                icon.className = 'fas fa-sort';
+            }
         });
         
-        // Add sort indicator to active column
-        const activeHeader = document.querySelector(`[data-column="${sortSelect.value}"]`);
-        if (activeHeader) {
-            activeHeader.classList.add(sortOrderSelect.value === 'asc' ? 'sorting-asc' : 'sorting-desc');
+        // Update current sort header
+        const currentHeader = document.querySelector(`[data-column="${currentSort}"]`);
+        if (currentHeader) {
+            currentHeader.classList.add(currentOrder === 'asc' ? 'sorting-asc' : 'sorting-desc');
+            const icon = currentHeader.querySelector('i');
+            if (icon) {
+                icon.className = currentOrder === 'asc' ? 'fas fa-sort-up' : 'fas fa-sort-down';
+            }
         }
     }
+
     
     truncateText(text, maxLength) {
         if (!text) return '';
@@ -814,8 +1054,11 @@ class PipelineMonitor {
             
             // Update status badge
             if (statusBadge && statusText) {
-                statusBadge.className = `pipeline-status-badge ${status.pipeline_state}`;
-                statusText.textContent = status.pipeline_state.replace('_', ' ').toUpperCase();
+                const pipelineState = status.pipeline_state || 'idle';
+                statusBadge.className = `pipeline-status-badge ${pipelineState}`;
+                statusText.textContent = typeof pipelineState === 'string' ? 
+                    pipelineState.replace('_', ' ').toUpperCase() : 
+                    'IDLE';
             }
             
             // Update metrics
@@ -835,7 +1078,31 @@ class PipelineMonitor {
                 progressFill.style.width = `${progress}%`;
             }
             
-            // Update control buttons
+            // Update control buttons in header
+            const headerPauseResumeBtn = document.getElementById('pause-resume-btn');
+            const headerStopBtn = document.getElementById('stop-btn');
+            
+            if (headerPauseResumeBtn && headerStopBtn) {
+                if (status.pipeline_state === 'running') {
+                    headerPauseResumeBtn.disabled = false;
+                    headerPauseResumeBtn.className = 'control-btn pause-btn';
+                    headerPauseResumeBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                    headerPauseResumeBtn.title = 'Pause Pipeline';
+                    headerStopBtn.disabled = false;
+                } else if (status.pipeline_state === 'paused') {
+                    headerPauseResumeBtn.disabled = false;
+                    headerPauseResumeBtn.className = 'control-btn resume-btn';
+                    headerPauseResumeBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    headerPauseResumeBtn.title = 'Resume Pipeline';
+                    headerStopBtn.disabled = false;
+                } else {
+                    headerPauseResumeBtn.disabled = true;
+                    headerPauseResumeBtn.title = 'Pipeline Not Active';
+                    headerStopBtn.disabled = true;
+                }
+            }
+            
+            // Update legacy control buttons (if they exist)
             if (pauseResumeBtn && stopBtn) {
                 if (status.pipeline_state === 'running') {
                     pauseResumeBtn.disabled = false;
@@ -856,22 +1123,15 @@ class PipelineMonitor {
             if (controlsSection) controlsSection.style.display = 'none';
         }
         
-        // Update agent status with new indicators
-        this.updateAgentStatus(status.agent_status);
+        // Update agent status with new indicators - use the detailed agent status
+        if (status.agent_status && typeof status.agent_status === 'object') {
+            // The agent_status from /api/status is already in the detailed format we need
+            // No conversion needed - just pass it directly to updateAgentStatus
+            this.updateAgentStatus(status.agent_status);
+        }
     }
     
-    updateAgentStatus(agentStatus) {
-        Object.entries(agentStatus).forEach(([agentName, status]) => {
-            const agentCard = document.getElementById(agentName.replace('_', '-'));
-            if (agentCard) {
-                const statusElement = agentCard.querySelector('.agent-status');
-                if (statusElement) {
-                    statusElement.className = `agent-status ${status}`;
-                    statusElement.textContent = status.replace('_', ' ').toUpperCase();
-                }
-            }
-        });
-    }
+
     
     // Modal functionality
     setupModal() {
@@ -945,8 +1205,7 @@ class PipelineMonitor {
         this.setModalElement('modal-impact-score', idea.impact_score || '-');
         this.setModalElement('modal-feasibility-score', idea.feasibility_score || '-');
         
-        const effort = idea.est_effort_days || idea.effort_estimate_days;
-        this.setModalElement('modal-effort', effort ? `${effort} days` : '-');
+
         
         // Hypothesis and Rationale
         this.setModalElement('modal-hypothesis', idea.hypothesis || 'No hypothesis provided');

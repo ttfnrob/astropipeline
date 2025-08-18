@@ -18,6 +18,10 @@ class ExperimentDesigner(BaseAgent):
     def __init__(self, config: Dict[str, Any], logger=None):
         super().__init__(config, logger)
         
+        # Lazy import to avoid circular dependency
+        from ..orchestration.tools import RegistryManager
+        self.registry_manager = RegistryManager(config.get('data_dir', 'data'), logger)
+        
         # Configuration
         self.model = config.get('model', 'gpt-4')
         self.temperature = config.get('temperature', 0.5)
@@ -127,27 +131,98 @@ class ExperimentDesigner(BaseAgent):
     
     def _load_approved_ideas(self) -> List[Dict[str, Any]]:
         """Load approved ideas that need experiment design."""
-        # TODO: Implement actual registry loading
-        self.logger.info("Registry loading not implemented, using mock data")
-        return []
+        try:
+            self.logger.info("Loading approved ideas from registry")
+            
+            # Load ideas from registry
+            ideas_df = self.registry_manager.load_registry('ideas_register')
+            
+            if ideas_df.empty:
+                self.logger.info("No ideas found in registry")
+                return []
+            
+            # Filter for approved ideas
+            approved_df = ideas_df[ideas_df['status'] == 'Approved']
+            
+            if approved_df.empty:
+                self.logger.info("No approved ideas found in registry")
+                return []
+            
+            # Convert to list of dictionaries
+            ideas_list = approved_df.to_dict('records')
+            
+            # Parse list fields that are stored as strings
+            for idea in ideas_list:
+                for field in ['domain_tags', 'novelty_refs', 'required_data', 'methods', 'literature_refs']:
+                    if field in idea and isinstance(idea[field], str):
+                        try:
+                            # Handle empty list strings
+                            if idea[field] in ['[]', '']:
+                                idea[field] = []
+                            else:
+                                # Parse JSON-like list string
+                                import ast
+                                idea[field] = ast.literal_eval(idea[field])
+                        except (ValueError, SyntaxError):
+                            # If parsing fails, treat as single item list or empty
+                            if idea[field].strip():
+                                idea[field] = [idea[field]]
+                            else:
+                                idea[field] = []
+            
+            self.logger.info(f"Found {len(ideas_list)} approved ideas needing experiment design")
+            return ideas_list
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load approved ideas: {str(e)}")
+            return []
     
     def _load_idea_by_id(self, idea_id: str) -> Optional[Dict[str, Any]]:
         """Load a specific idea by ID."""
-        # TODO: Implement actual registry loading
-        self.logger.info("Registry loading not implemented, using mock data")
-        
-        # Return mock approved idea
-        return {
-            'idea_id': idea_id,
-            'title': 'Mock Approved Idea',
-            'hypothesis': 'Test hypothesis for experiment design',
-            'rationale': 'Test rationale',
-            'domain_tags': ['stellar dynamics'],
-            'required_data': ['Gaia DR3', 'SDSS'],
-            'methods': ['Statistical analysis'],
-            'est_effort_days': 10,
-            'status': 'Approved'
-        }
+        try:
+            self.logger.info(f"Loading idea {idea_id} from registry")
+            
+            # Load ideas from registry
+            ideas_df = self.registry_manager.load_registry('ideas_register')
+            
+            if ideas_df.empty:
+                self.logger.warning("Ideas registry is empty")
+                return None
+            
+            # Find the specific idea
+            matching_ideas = ideas_df[ideas_df['idea_id'] == idea_id]
+            
+            if matching_ideas.empty:
+                self.logger.warning(f"Idea {idea_id} not found in registry")
+                return None
+            
+            # Get the first match (should be unique)
+            idea_data = matching_ideas.iloc[0].to_dict()
+            
+            # Parse list fields that are stored as strings
+            for field in ['domain_tags', 'novelty_refs', 'required_data', 'methods', 'literature_refs']:
+                if field in idea_data and isinstance(idea_data[field], str):
+                    try:
+                        # Handle empty list strings
+                        if idea_data[field] in ['[]', '']:
+                            idea_data[field] = []
+                        else:
+                            # Parse JSON-like list string
+                            import ast
+                            idea_data[field] = ast.literal_eval(idea_data[field])
+                    except (ValueError, SyntaxError):
+                        # If parsing fails, treat as single item list or empty
+                        if idea_data[field].strip():
+                            idea_data[field] = [idea_data[field]]
+                        else:
+                            idea_data[field] = []
+            
+            self.logger.info(f"Found idea: {idea_data.get('title', 'unknown')}")
+            return idea_data
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load idea {idea_id}: {str(e)}")
+            return None
     
     def _generate_experiment_plan(self, idea: Dict[str, Any]) -> str:
         """Generate detailed experiment plan."""

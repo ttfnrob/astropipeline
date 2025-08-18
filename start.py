@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import asyncio
+import signal
 import os
 import sys
 import subprocess
@@ -111,6 +112,80 @@ def setup_data_directories():
     
     print("✅ Data directories created")
 
+def clean_projects(force=False):
+    """Clean all projects and registry data for fresh start."""
+    import shutil
+    
+    print("🧹 Cleaning all projects and starting fresh...")
+    
+    # Safety confirmation unless forced
+    if not force:
+        print("⚠️  WARNING: This will permanently delete:")
+        print("   - All projects in Library, Preparing, Ready for Execution, and Archive")
+        print("   - All registry data (ideas_register.csv, project_index.csv, etc.)")
+        print("   - All processed data and vectors")
+        
+        if not force:
+            try:
+                response = input("\nAre you sure you want to continue? (y/N): ").lower().strip()
+                if response not in ['y', 'yes']:
+                    print("❌ Operation cancelled.")
+                    return False
+            except KeyboardInterrupt:
+                print("\n❌ Operation cancelled by user.")
+                return False
+    
+    base_dir = Path(__file__).parent
+    projects_dir = base_dir / "projects"
+    data_dir = base_dir / "data"
+    
+    # Project directories to clean
+    project_subdirs = [
+        "Library",
+        "Preparing", 
+        "Ready for Execution",
+        "Archive"
+    ]
+    
+    # Remove all project contents
+    for subdir in project_subdirs:
+        project_path = projects_dir / subdir
+        if project_path.exists():
+            print(f"  🗑️  Removing {subdir} projects...")
+            shutil.rmtree(project_path)
+            project_path.mkdir(exist_ok=True)  # Recreate empty directory
+    
+    # Reset registry CSV files to headers only
+    registry_dir = data_dir / "registry"
+    csv_files = {
+        "ideas_register.csv": "idea_id,title,hypothesis,status,created_at,total_score,domain_tags,est_effort_days",
+        "project_index.csv": "idea_id,slug,path,maturity,created_at", 
+        "completed_index.csv": "idea_id,title,moved_to_library_at"
+    }
+    
+    if registry_dir.exists():
+        print("  📊 Resetting registry files...")
+        for filename, header in csv_files.items():
+            csv_file = registry_dir / filename
+            csv_file.write_text(header + "\n")
+    
+    # Clean data processing directories (but keep structure)
+    data_subdirs = ["interim", "processed", "vectors"]
+    for subdir in data_subdirs:
+        data_path = data_dir / subdir
+        if data_path.exists():
+            print(f"  🗑️  Cleaning {subdir} data...")
+            shutil.rmtree(data_path)
+            data_path.mkdir(exist_ok=True)
+    
+    print("✅ All projects and data cleaned! Starting with fresh slate.")
+    print("   - All project directories emptied")
+    print("   - Registry files reset to headers only") 
+    print("   - Processing data cleared")
+    print()
+    
+    return True
+
 def check_dependencies():
     """Check if required Python packages are installed."""
     print("📦 Checking dependencies...")
@@ -129,11 +204,15 @@ def check_dependencies():
     
     if missing:
         print(f"❌ Missing packages: {', '.join(missing)}")
-        response = input("Install missing dependencies? (y/n): ").lower().strip()
-        if response in ['y', 'yes']:
-            install_dependencies()
-        else:
-            print("Please install dependencies: pip install -r requirements.txt")
+        try:
+            response = input("Install missing dependencies? (y/n): ").lower().strip()
+            if response in ['y', 'yes']:
+                install_dependencies()
+            else:
+                print("Please install dependencies: pip install -r requirements.txt")
+                return False
+        except KeyboardInterrupt:
+            print("\n❌ Installation cancelled by user.")
             return False
     else:
         print("✅ All dependencies satisfied")
@@ -231,7 +310,7 @@ def run_discrete_pipeline(domain_tags=None, n_hypotheses=3):
         agent_inputs = {
             'domain_tags': domain_tags,
             'n_hypotheses': n_hypotheses,
-            'recency_years': 3
+            'ambitious_mode': True  # Generate bold, paradigm-shifting hypotheses
         }
         
         print(f"🎯 Generating {n_hypotheses} hypotheses for: {', '.join(domain_tags)}")
@@ -276,8 +355,10 @@ def run_continuous_pipeline(domain_tags=None, n_hypotheses=3, complete_ideas=3, 
         
         initial_inputs = {
             'domain_tags': domain_tags,
-            'pipeline_size': max(n_hypotheses, 3),  # Keep 3+ ideas in pipeline
-            'recency_years': 3
+            'min_pipeline_size': min(n_hypotheses, 3),  # Keep minimal pipeline
+            'max_total_ideas': 15,  # Hard limit on total ideas
+            'max_active_projects': 8,  # Hard limit on active projects  
+            'ambitious_mode': True  # Focus on paradigm-shifting research
         }
         
         print(f"🎯 Domains: {', '.join(domain_tags)}")
@@ -404,35 +485,69 @@ async def run_concurrent_continuous(domain_tags=None, n_hypotheses=3, complete_i
     print("🚀 Starting Full AstroAgent Pipeline System (Concurrent Continuous Mode)")
     print("=" * 50)
     
-    # Start web UI in background
-    print("🌐 Starting web UI server...")
-    web_ui_task = asyncio.create_task(start_web_ui_background())
+    # Setup shutdown event but NO signal handlers here (they're set up in main)
+    shutdown_event = asyncio.Event()
+    tasks = []
     
-    # Give web UI time to start
-    await asyncio.sleep(2)
-    
-    print("🔄 Starting continuous pipeline execution...")
-    print(f"📊 Target: Complete {complete_ideas} ideas through full workflow")
-    if max_time_minutes:
-        print(f"⏰ Max time: {max_time_minutes} minutes")
-    print("📊 Monitor progress at: http://localhost:8000")
-    print("=" * 50)
-    
-    # Run continuous pipeline in background while web UI serves
     try:
+        # Start web UI in background
+        print("🌐 Starting web UI server...")
+        web_ui_task = asyncio.create_task(start_web_ui_background())
+        tasks.append(web_ui_task)
+        
+        # Give web UI time to start
+        await asyncio.sleep(2)
+        
+        print("🔄 Starting continuous pipeline execution...")
+        print(f"📊 Target: Complete {complete_ideas} ideas through full workflow")
+        if max_time_minutes:
+            print(f"⏰ Max time: {max_time_minutes} minutes")
+        print("📊 Monitor progress at: http://localhost:8000")
+        print("📋 Press Ctrl+C to stop gracefully")
+        print("=" * 50)
+        
+        # Run continuous pipeline in background while web UI serves
         pipeline_task = asyncio.create_task(run_continuous_pipeline_async(
             domain_tags, n_hypotheses, complete_ideas, max_time_minutes))
+        tasks.append(pipeline_task)
         
-        # Wait for both to complete (web UI runs indefinitely until interrupted)
-        await asyncio.gather(pipeline_task, web_ui_task)
-        
+        # Wait for shutdown signal with much faster response
+        while not shutdown_event.is_set():
+            # Check if any task has completed/failed
+            done_tasks = [t for t in tasks if t.done()]
+            if done_tasks:
+                # If any critical task failed, trigger shutdown
+                for task in done_tasks:
+                    if task.exception():
+                        print(f"Task failed: {task.exception()}")
+                        shutdown_event.set()
+                        break
+            
+            # Very brief sleep to allow signal handling - much more responsive
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=0.05)
+            except asyncio.TimeoutError:
+                continue
+                
     except KeyboardInterrupt:
-        print("\n👋 Shutting down system...")
-        web_ui_task.cancel()
-        try:
-            await web_ui_task
-        except asyncio.CancelledError:
-            pass
+        print("\n👋 Shutting down system (KeyboardInterrupt)...")
+    finally:
+        # Graceful shutdown
+        print("🛑 Cancelling all tasks...")
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        
+        # Wait briefly for tasks to cancel with shorter timeout
+        if tasks:
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=2.0)
+            except asyncio.TimeoutError:
+                print("⚠️  Some tasks took too long to cancel, forcing shutdown...")
+            except Exception as e:
+                print(f"⚠️  Error during shutdown: {e}")
+        
+        print("✅ Shutdown complete")
 
 async def start_web_ui_background():
     """Start web UI in background mode."""
@@ -458,12 +573,19 @@ async def run_pipeline_async(domain_tags=None, n_hypotheses=3):
     def run_in_thread():
         return run_discrete_pipeline(domain_tags, n_hypotheses)
     
-    # Run the synchronous pipeline in a thread pool
+    # Run the synchronous pipeline in a thread pool with proper cancellation
     import concurrent.futures
     loop = asyncio.get_event_loop()
     
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        success = await loop.run_in_executor(executor, run_in_thread)
+        future = loop.run_in_executor(executor, run_in_thread)
+        try:
+            success = await future
+        except asyncio.CancelledError:
+            print("⚠️  Pipeline execution cancelled")
+            # Cancel the future if possible
+            future.cancel()
+            return False
     
     if success:
         print("\n✅ Discrete pipeline completed successfully!")
@@ -478,12 +600,19 @@ async def run_continuous_pipeline_async(domain_tags=None, n_hypotheses=3, comple
     def run_in_thread():
         return run_continuous_pipeline(domain_tags, n_hypotheses, complete_ideas, max_time_minutes)
     
-    # Run the synchronous pipeline in a thread pool
+    # Run the synchronous pipeline in a thread pool with proper cancellation
     import concurrent.futures
     loop = asyncio.get_event_loop()
     
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        success = await loop.run_in_executor(executor, run_in_thread)
+        future = loop.run_in_executor(executor, run_in_thread)
+        try:
+            success = await future
+        except asyncio.CancelledError:
+            print("⚠️  Pipeline execution cancelled")
+            # Cancel the future if possible
+            future.cancel()
+            return False
     
     if success:
         print("\n✅ Continuous pipeline completed successfully!")
@@ -499,25 +628,29 @@ def main():
         description="AstroAgent Pipeline - AI-Powered Astrophysics Research System",
         epilog="""
 Examples:
-  python start.py                        # Run pipeline and web UI together (default)
-  python start.py --domains "exoplanets" --complete-ideas 2
-                                         # Run until 2 exoplanet ideas are completed
+  python start.py                        # Run pipeline and web UI together (default, auto-pauses after 1 completed idea)
+  python start.py --domains "exoplanets" --complete-ideas 2  
+                                         # Run until 2 exoplanet ideas are completed, then auto-pause
   python start.py web                    # Start web UI only
-  python start.py pipeline               # Run continuous pipeline only (default)
+  python start.py pipeline               # Run continuous pipeline only (auto-pauses after 1 idea completed)
   python start.py pipeline --mode discrete --count 5
                                          # Run discrete mode: generate 5 hypotheses once
-  python start.py pipeline --complete-ideas 5 --max-time 30
-                                         # Run until 5 ideas completed or 30 min max
+  python start.py pipeline --complete-ideas 3 --max-time 60
+                                         # Run until 3 ideas completed or 60 min max, whichever comes first
   python start.py all                    # Run pipeline then start web UI (sequential)
   python start.py demo                   # Demo mode with sample data
   python start.py test                   # Quick functionality test
+  python start.py clean                  # Clean all projects and start fresh (with confirmation)
+  python start.py clean --force          # Clean without confirmation prompt
+  python start.py --fresh pipeline       # Clean first, then run pipeline
+  python start.py --fresh --force pipeline # Clean without prompt, then run pipeline
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
     parser.add_argument(
         'action',
-        choices=['web', 'pipeline', 'all', 'concurrent', 'demo', 'test'],
+        choices=['web', 'pipeline', 'all', 'concurrent', 'demo', 'test', 'clean'],
         nargs='?',
         default='concurrent',
         help='Action to perform (default: concurrent - runs pipeline and web UI together)'
@@ -546,8 +679,8 @@ Examples:
     parser.add_argument(
         '--complete-ideas',
         type=int,
-        default=3,
-        help='Number of ideas to complete through full workflow (continuous mode, default: 3)'
+        default=1,
+        help='Number of ideas to complete through full workflow (continuous mode, default: 1 - auto-pauses after first completion)'
     )
     
     parser.add_argument(
@@ -560,6 +693,18 @@ Examples:
         '--skip-checks',
         action='store_true',
         help='Skip environment and dependency checks'
+    )
+    
+    parser.add_argument(
+        '--fresh',
+        action='store_true',
+        help='Clean all projects and start fresh (useful for testing)'
+    )
+    
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Force clean without confirmation prompt (use with --fresh or clean action)'
     )
     
     args = parser.parse_args()
@@ -581,10 +726,42 @@ Examples:
     if args.domains:
         domain_tags = [d.strip() for d in args.domains.split(',')]
     
-    # Execute the requested action
+    # Clean projects if requested
+    if args.fresh or args.action == 'clean':
+        success = clean_projects(force=args.force)
+        if args.action == 'clean':
+            if success:
+                print("🎉 Projects cleaned successfully!")
+                sys.exit(0)
+            else:
+                print("❌ Clean operation cancelled or failed.")
+                sys.exit(1)
+    
+    # Setup signal handling for main process
+    def signal_handler(sig, frame):
+        print(f"\n⚠️  Received signal {sig}, shutting down immediately...")
+        print("🔥 Force shutdown!")
+        # Immediate exit - no cleanup
+        os._exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Execute the requested action with proper signal handling
+    def run_with_signal_handling(coro_func):
+        """Run async function with immediate Ctrl+C handling."""
+        try:
+            return asyncio.run(coro_func)
+        except KeyboardInterrupt:
+            print("\n👋 Stopped by user (Ctrl+C)")
+            os._exit(0)
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            os._exit(1)
+    
     try:
         if args.action == 'web':
-            asyncio.run(start_web_ui())
+            run_with_signal_handling(start_web_ui())
             
         elif args.action == 'pipeline':
             if args.mode == 'continuous':
@@ -601,15 +778,30 @@ Examples:
             sys.exit(0 if success else 1)
             
         elif args.action == 'all':
-            asyncio.run(run_all(domain_tags, args.count))
+            run_with_signal_handling(run_all(domain_tags, args.count))
             
         elif args.action == 'concurrent':
             if args.mode == 'continuous':
-                asyncio.run(run_concurrent_continuous(domain_tags, args.count, 
-                                                    getattr(args, 'complete_ideas', 3),
-                                                    getattr(args, 'max_time', None)))
+                # Set up IMMEDIATE signal handler - no asyncio interference
+                def immediate_signal_handler(sig, frame):
+                    print(f"\n⚠️  Received signal {sig}, shutting down immediately...")
+                    print("🔥 Force shutdown - killing all processes...")
+                    os._exit(0)
+                
+                # Register signal handlers at main thread level
+                signal.signal(signal.SIGINT, immediate_signal_handler)
+                signal.signal(signal.SIGTERM, immediate_signal_handler)
+                
+                # Don't use run_with_signal_handling - use plain asyncio.run
+                try:
+                    asyncio.run(run_concurrent_continuous(domain_tags, args.count, 
+                                                        getattr(args, 'complete_ideas', 3),
+                                                        getattr(args, 'max_time', None)))
+                except KeyboardInterrupt:
+                    print("\n👋 Stopped by user (Ctrl+C)")
+                    os._exit(0)
             else:
-                asyncio.run(run_concurrent(domain_tags, args.count))
+                run_with_signal_handling(run_concurrent(domain_tags, args.count))
             
         elif args.action == 'demo':
             run_demo()
@@ -619,7 +811,8 @@ Examples:
             sys.exit(0 if success else 1)
     
     except KeyboardInterrupt:
-        print("\n👋 Stopped by user")
+        print("\n👋 Stopped by user (Ctrl+C)")
+        sys.exit(0)
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
         sys.exit(1)

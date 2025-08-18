@@ -13,11 +13,45 @@
         <!-- Header -->
         <header class="header">
             <div class="header-content">
-                <h1><i class="fas fa-rocket"></i> AstroAgent Pipeline Monitor</h1>
-                <div class="status-indicator">
-                    <span id="connection-status" class="status-badge connecting">
-                        <i class="fas fa-circle"></i> Connecting...
-                    </span>
+                                        <h1><i class="fas fa-rocket"></i> AstroAgent Continuous Research System</h1>
+                <div class="header-controls">
+                    <!-- Continuous System Control -->
+                    <div class="continuous-controls">
+                        <div class="run-status" id="run-status">
+                            <span class="status-indicator idle" id="status-indicator"></span>
+                            <span class="status-text" id="status-text">System Idle</span>
+                        </div>
+                        <div class="current-stage" id="current-stage-indicator" style="display: none;">
+                            <div class="stage-name">System Idle</div>
+                        </div>
+                        <div class="run-metrics" id="run-metrics" style="display: none;">
+                            <span class="metric">Cycle: <span id="current-cycle">0</span></span>
+                            <span class="metric">Completed: <span id="completed-count">0</span></span>
+                            <span class="metric">Runtime: <span id="runtime-display">00:00:00</span></span>
+                        </div>
+                        <div class="dropdown">
+                            <button id="control-dropdown-btn" class="control-btn primary-btn" title="System Controls">
+                                <i class="fas fa-cog"></i> Controls
+                            </button>
+                            <div class="dropdown-content" id="control-dropdown">
+                                <button id="pause-resume-btn" class="dropdown-item" disabled>
+                                    <i class="fas fa-pause"></i> Pause System
+                                </button>
+                                <button id="stop-btn" class="dropdown-item" disabled>
+                                    <i class="fas fa-stop"></i> Stop System
+                                </button>
+                                <hr class="dropdown-divider">
+                                <button id="kill-rogue-btn" class="dropdown-item emergency-item">
+                                    <i class="fas fa-skull"></i> Kill Rogue Processes
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="status-indicator">
+                        <span id="connection-status" class="status-badge connecting">
+                            <i class="fas fa-circle"></i> Connecting...
+                        </span>
+                    </div>
                 </div>
             </div>
         </header>
@@ -28,11 +62,11 @@
             <section class="status-cards">
                 <div class="card">
                     <div class="card-header">
-                        <h3><i class="fas fa-play-circle"></i> Active Pipelines</h3>
+                        <h3><i class="fas fa-play-circle"></i> System Status</h3>
                     </div>
                     <div class="card-content">
-                        <div class="metric" id="active-pipelines">0</div>
-                        <div class="metric-label">Running</div>
+                        <div class="metric" id="system-status">Idle</div>
+                        <div class="metric-label">Current State</div>
                     </div>
                 </div>
 
@@ -58,62 +92,24 @@
 
                 <div class="card">
                     <div class="card-header">
-                        <h3><i class="fas fa-clock"></i> Recent Activity</h3>
+                        <h3><i class="fas fa-trophy"></i> Completed</h3>
                     </div>
                     <div class="card-content">
-                        <div class="metric" id="recent-activity">0</div>
-                        <div class="metric-label">Last 30 days</div>
+                        <div class="metric" id="completed-projects">0</div>
+                        <div class="metric-label">Projects Done</div>
                     </div>
                 </div>
             </section>
 
-            <!-- Pipeline Control Section -->
-            <section class="pipeline-control-section" id="pipeline-controls" style="display: none;">
-                <div class="control-card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-cogs"></i> Continuous Pipeline Control</h3>
-                        <div class="pipeline-status-badge" id="pipeline-status-badge">
-                            <span class="status-text" id="pipeline-status-text">Idle</span>
-                        </div>
-                    </div>
-                    <div class="card-content">
-                        <div class="control-row">
-                            <div class="control-info">
-                                <div class="control-metric">
-                                    <span class="label">Runtime:</span>
-                                    <span class="value" id="pipeline-runtime">00:00:00</span>
-                                </div>
-                                <div class="control-metric">
-                                    <span class="label">Cycle:</span>
-                                    <span class="value" id="pipeline-cycle">0</span>
-                                </div>
-                                <div class="control-metric">
-                                    <span class="label">Completed:</span>
-                                    <span class="value" id="pipeline-completed">0</span>
-                                    <span class="target" id="pipeline-target">/3</span>
-                                </div>
-                            </div>
-                            <div class="control-buttons">
-                                <button id="pause-resume-btn" class="control-btn pause-btn" disabled>
-                                    <i class="fas fa-pause"></i> Pause
-                                </button>
-                                <button id="stop-btn" class="control-btn stop-btn" disabled>
-                                    <i class="fas fa-stop"></i> Stop
-                                </button>
-                            </div>
-                        </div>
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
-                        </div>
-                    </div>
-                </div>
-            </section>
+
+
+
 
             <!-- Agent Status Section -->
             <section class="agent-status-section">
-                <h2><i class="fas fa-robot"></i> Agent Status</h2>
+                <h2><i class="fas fa-robot"></i> Live Agent Status</h2>
                 <div class="agent-grid">
-                    <div class="agent-card" id="hypothesis-maker">
+                    <div class="agent-card" id="hypothesis_maker">
                         <div class="agent-icon">
                             <i class="fas fa-brain"></i>
                         </div>
@@ -121,7 +117,9 @@
                             <h3>Hypothesis Maker</h3>
                             <div class="agent-status idle">Idle</div>
                             <div class="agent-details">
+                                <span class="current-project">Project: None</span>
                                 <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
                             </div>
                         </div>
                     </div>
@@ -134,12 +132,14 @@
                             <h3>Reviewer</h3>
                             <div class="agent-status idle">Idle</div>
                             <div class="agent-details">
+                                <span class="current-project">Project: None</span>
                                 <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
                             </div>
                         </div>
                     </div>
 
-                    <div class="agent-card" id="experiment-designer">
+                    <div class="agent-card" id="experiment_designer">
                         <div class="agent-icon">
                             <i class="fas fa-flask"></i>
                         </div>
@@ -147,7 +147,9 @@
                             <h3>Experiment Designer</h3>
                             <div class="agent-status idle">Idle</div>
                             <div class="agent-details">
+                                <span class="current-project">Project: None</span>
                                 <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
                             </div>
                         </div>
                     </div>
@@ -160,15 +162,80 @@
                             <h3>Experimenter</h3>
                             <div class="agent-status idle">Idle</div>
                             <div class="agent-details">
+                                <span class="current-project">Project: None</span>
                                 <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="agent-card" id="peer_reviewer">
+                        <div class="agent-icon">
+                            <i class="fas fa-user-check"></i>
+                        </div>
+                        <div class="agent-info">
+                            <h3>Peer Reviewer</h3>
+                            <div class="agent-status idle">Idle</div>
+                            <div class="agent-details">
+                                <span class="current-project">Project: None</span>
+                                <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="agent-card" id="reporter">
+                        <div class="agent-icon">
+                            <i class="fas fa-file-alt"></i>
+                        </div>
+                        <div class="agent-info">
+                            <h3>Reporter</h3>
+                            <div class="agent-status idle">Idle</div>
+                            <div class="agent-details">
+                                <span class="current-project">Project: None</span>
+                                <span class="last-activity">Last active: Never</span>
+                                <span class="execution-stats">0 executions</span>
                             </div>
                         </div>
                     </div>
                 </div>
             </section>
 
+            <!-- Pipeline Start Section -->
+            <section class="pipeline-start-section">
+                <div class="control-card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-play"></i> Start Continuous Research</h3>
+                    </div>
+                    <div class="card-content">
+                        <form id="continuous-form" class="continuous-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="domain-tags">Research Domains:</label>
+                                    <input type="text" id="domain-tags" placeholder="stellar evolution, galactic dynamics" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="n-hypotheses">Target Completions:</label>
+                                    <input type="number" id="n-hypotheses" min="1" max="10" value="3" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ambition-level">Ambition Level:</label>
+                                    <select id="ambition-level" required>
+                                        <option value="incremental">Incremental</option>
+                                        <option value="significant" selected>Significant</option>
+                                        <option value="paradigm-shifting">Paradigm-Shifting</option>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn-primary" id="start-continuous-btn">
+                                    <i class="fas fa-play"></i> Start Research
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+
             <!-- Content Tabs -->
-            <section class="content-tabs">
                 <div class="tab-buttons">
                     <button class="tab-button active" data-tab="ideas">
                         <i class="fas fa-lightbulb"></i> Recent Ideas
@@ -176,11 +243,11 @@
                     <button class="tab-button" data-tab="projects">
                         <i class="fas fa-project-diagram"></i> Active Projects
                     </button>
+                    <button class="tab-button" data-tab="completed">
+                        <i class="fas fa-trophy"></i> Complete Projects
+                    </button>
                     <button class="tab-button" data-tab="statistics">
                         <i class="fas fa-chart-bar"></i> Statistics
-                    </button>
-                    <button class="tab-button" data-tab="control">
-                        <i class="fas fa-play"></i> Pipeline Control
                     </button>
                 </div>
 
@@ -209,7 +276,6 @@
                                 <option value="title">Title</option>
                                 <option value="status">Status</option>
                                 <option value="total_score">Score</option>
-                                <option value="est_effort_days">Effort</option>
                             </select>
                             <select id="ideas-sort-order" class="sort-order-select">
                                 <option value="desc">Descending</option>
@@ -235,14 +301,14 @@
                                     <th class="sortable-header" data-column="status">
                                         Status <i class="fas fa-sort"></i>
                                     </th>
+                                    <th class="sortable-header" data-column="current_agent">
+                                        Current Agent <i class="fas fa-sort"></i>
+                                    </th>
                                     <th class="sortable-header" data-column="total_score">
                                         Score <i class="fas fa-sort"></i>
                                     </th>
                                     <th class="sortable-header" data-column="domain_tags">
                                         Domain Tags <i class="fas fa-sort"></i>
-                                    </th>
-                                    <th class="sortable-header" data-column="est_effort_days">
-                                        Effort <i class="fas fa-sort"></i>
                                     </th>
                                     <th class="sortable-header" data-column="created_at">
                                         Created <i class="fas fa-sort"></i>
@@ -297,51 +363,26 @@
                     </div>
                 </div>
 
-                <!-- Control Tab -->
-                <div class="tab-content" id="control-tab">
-                    <div class="control-panel">
-                        <h3>Start New Pipeline</h3>
-                        <form id="pipeline-form" class="pipeline-form">
-                            <div class="form-group">
-                                <label for="domain-tags">Domain Tags (comma-separated):</label>
-                                <input 
-                                    type="text" 
-                                    id="domain-tags" 
-                                    placeholder="e.g., stellar evolution, galactic dynamics"
-                                    required
-                                >
-                            </div>
-                            <div class="form-group">
-                                <label for="n-hypotheses">Number of Hypotheses:</label>
-                                <input 
-                                    type="number" 
-                                    id="n-hypotheses" 
-                                    min="1" 
-                                    max="10" 
-                                    value="3"
-                                    required
-                                >
-                            </div>
-                            <div class="form-group">
-                                <label for="recency-years">Recency (years):</label>
-                                <input 
-                                    type="number" 
-                                    id="recency-years" 
-                                    min="1" 
-                                    max="10" 
-                                    value="3"
-                                    required
-                                >
-                            </div>
-                            <button type="submit" class="btn-primary">
-                                <i class="fas fa-play"></i> Start Pipeline
-                            </button>
-                        </form>
-
-                        <div id="pipeline-status" class="pipeline-status" style="display: none;">
-                            <h4>Active Pipeline</h4>
-                            <div id="pipeline-info"></div>
-                        </div>
+                <!-- Complete Projects Tab -->
+                <div class="tab-content" id="completed-tab">
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Project Path</th>
+                                    <th>Has Paper</th>
+                                    <th>Has Peer Review</th>
+                                    <th>Paper</th>
+                                    <th>Completed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="completed-table-body">
+                                <tr>
+                                    <td colspan="6" class="loading">Loading completed projects...</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </section>
@@ -407,10 +448,7 @@
                             <span class="label">Feasibility Score:</span>
                             <span class="value" id="modal-feasibility-score">-</span>
                         </div>
-                        <div class="detail-item">
-                            <span class="label">Estimated Effort:</span>
-                            <span class="value" id="modal-effort">-</span>
-                        </div>
+
                     </div>
 
                     <div class="detail-section full-width">

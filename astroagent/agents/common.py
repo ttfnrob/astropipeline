@@ -86,7 +86,7 @@ class ProjectSchema(BaseModel):
     # Maturity tracking
     maturity: str = Field(
         default="Draft",
-        pattern=r"^(Draft|Preparing|Ready|Running|Blocked|Complete|Failed)$"
+        pattern=r"^(Draft|Preparing|Ready|Running|Executed|AwaitingReview|Reviewed|Blocked|Complete|Failed)$"
     )
     
     # Execution metadata
@@ -350,6 +350,48 @@ def create_project_folder(idea_id: str, title: str, base_path: str = "projects")
     return str(project_path), slug
 
 
+def move_project_folder(idea_id: str, slug: str, from_maturity: str, to_maturity: str, base_path: str = "projects") -> str:
+    """Move project folder between directories based on maturity status."""
+    import shutil
+    
+    # Map maturity statuses to directory names
+    maturity_dirs = {
+        'Preparing': 'Preparing',
+        'Prepared': 'Preparing', 
+        'Ready': 'Ready for Execution',
+        'Running': 'Ready for Execution',
+        'Executed': 'Ready for Execution',
+        'AwaitingReview': 'Ready for Execution',
+        'Reviewed': 'Ready for Execution',
+        'Complete': 'Library',
+        'Failed': 'Preparing'  # Failed projects go back to Preparing
+    }
+    
+    from_dir = maturity_dirs.get(from_maturity, 'Preparing')
+    to_dir = maturity_dirs.get(to_maturity, 'Preparing')
+    
+    # Skip if no movement needed
+    if from_dir == to_dir:
+        folder_name = f"{idea_id}__{slug}"
+        return str(Path(base_path) / to_dir / folder_name)
+    
+    folder_name = f"{idea_id}__{slug}"
+    from_path = Path(base_path) / from_dir / folder_name
+    to_path = Path(base_path) / to_dir / folder_name
+    
+    # Create target directory if it doesn't exist
+    to_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Move folder if source exists
+    if from_path.exists():
+        if to_path.exists():
+            shutil.rmtree(to_path)  # Remove existing target
+        shutil.move(str(from_path), str(to_path))
+        print(f"📁 Moved project from {from_dir}/ to {to_dir}/")
+    
+    return str(to_path)
+
+
 def generate_ulid() -> str:
     """Generate a new ULID-like identifier for idea identification."""
     # Generate a ULID-like ID using timestamp + random UUID
@@ -395,8 +437,8 @@ IDEA_STATUSES = [
 ]
 
 PROJECT_MATURITIES = [
-    "Draft", "Preparing", "Ready", "Running", 
-    "Blocked", "Complete", "Failed"
+    "Draft", "Preparing", "Ready", "Running", "Executed", 
+    "AwaitingReview", "Reviewed", "Blocked", "Complete", "Failed"
 ]
 
 REVIEW_VERDICTS = ["Approved", "Changes requested", "Rejected"]

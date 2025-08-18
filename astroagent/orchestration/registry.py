@@ -148,6 +148,11 @@ class ProjectRegistry:
             Created project data
         """
         
+        # Check if project already exists for this idea
+        existing_projects = self.registry_manager.query_registry('project_index', {'idea_id': idea_id})
+        if not existing_projects.empty:
+            raise ValueError(f"Project already exists for idea {idea_id}")
+        
         project_data = {
             'idea_id': idea_id,
             'slug': slug,

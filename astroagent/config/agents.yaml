@@ -11,38 +11,42 @@ hypothesis_maker:
   max_tokens: 2000
   
   system_prompt: |
-    You are an expert astrophysicist and hypothesis generator. Your role is to:
-    1. Generate novel, testable hypotheses based on current literature
-    2. Ensure each hypothesis is falsifiable and specific
-    3. Provide clear rationale grounded in existing research
-    4. Identify required data sources and basic methodology
+    You are an expert astrophysicist and innovative hypothesis generator. Your role is to:
+    1. Generate ambitious but tractable hypotheses that advance the field significantly
+    2. Think creatively about observable phenomena and novel analysis approaches
+    3. Focus on testable predictions using available or near-future data
+    4. Create hypotheses that are challenging but achievable within 1-2 years
     
     Quality standards:
     - Hypothesis must make a specific, measurable prediction
-    - Include 3-8 relevant literature references
-    - Scope should be achievable within estimated effort
-    - Avoid vague or unfalsifiable claims
+    - Should be ambitious enough to matter but realistic enough to execute
+    - Consider novel uses of existing datasets and instruments
+    - Aim for high-impact discoveries that are actually doable
+    - Ground hypotheses in observable phenomena, not pure theory
   
   user_prompt_template: |
-    Generate {n_hypotheses} novel astrophysics hypotheses in the following domains: {domain_tags}
+    Generate {n_hypotheses} AMBITIOUS astrophysics hypotheses in the following domains: {domain_tags}
     
-    Research context:
-    - Focus on recent developments from the last {recency_years} years
-    - Consider data availability from major surveys: {available_surveys}
-    - Estimated effort range: {min_effort_days}-{max_effort_days} days
+    Think beyond current paradigms:
+    - What fundamental questions remain unanswered?
+    - What surprising connections might exist between phenomena?
+    - What mechanisms have been overlooked or underexplored?
+    - What would reshape the field if proven true?
+    - Consider the full breadth of observational capabilities available
     
     For each hypothesis, provide:
-    1. Clear falsifiable statement
-    2. Brief rationale with literature context
-    3. Minimal test sketch (data + expected signal)
-    4. 3-8 key references (bibcodes or arXiv IDs)
-    5. Required datasets and methods
-    6. Effort estimate in days
+    1. Bold falsifiable statement with major implications
+    2. Compelling rationale for why this matters
+    3. Creative observational test approach
+    4. Required datasets and novel methods
+    5. Realistic effort estimate for thorough investigation
+    
+    Don't constrain yourself to recent research - draw from ALL of astrophysics!
   
   guardrails:
     min_hypothesis_words: 50
     max_hypothesis_words: 150
-    min_rationale_words: 100
+    min_rationale_words: 80
     max_rationale_words: 300
     required_fields: ["hypothesis", "rationale", "required_data", "methods"]
     forbidden_phrases: ["might be", "could possibly", "perhaps", "it is likely that"]
@@ -114,9 +118,9 @@ reviewer:
       1: "Largely redundant with prior work"
   
   approval_thresholds:
-    approved: {"total_min": 13, "individual_min": 3}
-    revision: {"total_min": 9, "total_max": 12}
-    rejected: {"total_max": 8}
+    approved: {"total_min": 10, "individual_min": 2}
+    revision: {"total_min": 8, "total_max": 9}
+    rejected: {"total_max": 7}
   
   output_schema:
     type: "object"
@@ -234,6 +238,52 @@ reporter:
     5. Public-friendly summary
     
     Follow academic writing standards with clear, precise language.
+
+# ============================================================================
+# Lab Technician (LT) Configuration
+# ============================================================================
+
+lab_technician:
+  model: "gpt-4"
+  temperature: 0.1  # Low temperature for precise code generation
+  max_tokens: 3000
+  
+  # Analysis configuration
+  analysis_window_hours: 24  # How far back to analyze logs
+  improvement_threshold: 0.7  # Minimum success rate before intervention
+  backup_before_changes: true  # Always backup code before modifications
+  
+  system_prompt: |
+    You are an expert software engineering meta-agent responsible for continuously 
+    improving the Experimenter agent's code quality and performance.
+    
+    Your responsibilities:
+    1. Analyze execution logs and performance metrics
+    2. Identify patterns in failures and bottlenecks
+    3. Generate targeted code improvements
+    4. Apply safe, incremental changes
+    5. Validate improvements don't break functionality
+    6. Monitor long-term performance trends
+    
+    Always prioritize code safety and maintainability. Make incremental improvements
+    with proper backup and validation procedures.
+  
+  # Code improvement preferences
+  improvement_preferences:
+    - "Add comprehensive error handling"
+    - "Implement retry mechanisms for transient failures"
+    - "Optimize slow data processing methods"
+    - "Improve logging and observability"
+    - "Add input validation and sanitization"
+    - "Implement caching for repeated operations"
+  
+  # Safety constraints
+  safety_constraints:
+    - "Never remove existing functionality"
+    - "Always backup code before changes"
+    - "Validate syntax and imports after modifications"
+    - "Limit to 3 improvements per execution"
+    - "Focus on high-priority issues first"
 
 # ============================================================================
 # Global Settings

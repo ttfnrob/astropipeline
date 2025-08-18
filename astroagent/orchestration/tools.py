@@ -145,6 +145,13 @@ class RegistryManager:
         # Load existing data
         df = self.load_registry(registry_name)
         
+        # Special duplicate prevention for project_index
+        if registry_name == 'project_index' and 'idea_id' in data:
+            existing_projects = df[df['idea_id'] == data['idea_id']] if not df.empty else pd.DataFrame()
+            if not existing_projects.empty:
+                self.logger.warning(f"Project already exists for idea {data['idea_id']}. Skipping duplicate.")
+                return
+        
         # Add timestamps if not provided
         if 'created_at' not in data and 'created_at' in df.columns:
             data['created_at'] = datetime.now(timezone.utc).isoformat()

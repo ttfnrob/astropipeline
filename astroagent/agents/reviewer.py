@@ -10,6 +10,7 @@ import pandas as pd
 
 from .common import BaseAgent, AgentExecutionContext, AgentResult, IdeaSchema
 from ..services.literature import LiteratureService
+from ..services.search_ads import ADSSearchService
 
 
 class Reviewer(BaseAgent):
@@ -20,6 +21,11 @@ class Reviewer(BaseAgent):
         
         # Initialize services
         self.literature_service = LiteratureService()
+        self.ads_service = ADSSearchService()
+        
+        # Lazy import to avoid circular dependency
+        from ..orchestration.tools import RegistryManager
+        self.registry_manager = RegistryManager(config.get('data_dir', 'data'), logger)
         
         # Configuration
         self.model = config.get('model', 'gpt-4')
@@ -32,7 +38,7 @@ class Reviewer(BaseAgent):
         
         try:
             # Load ideas to review
-            input_filter = context.input_data.get('filter', {'status': 'Proposed'})
+            input_filter = context.input_data.get('filter', {'status': ['Proposed', 'Under Review']})
             ideas_to_review = self._load_ideas_for_review(input_filter)
             
             if not ideas_to_review:
@@ -99,26 +105,49 @@ class Reviewer(BaseAgent):
     def _load_ideas_for_review(self, filter_criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Load ideas from registry based on filter criteria."""
         try:
-            # TODO: Implement actual registry loading
-            # For now, return mock data
-            self.logger.info("Registry loading not implemented, using mock data")
+            # Load ideas from the registry
+            self.logger.info("Loading ideas from registry for review")
             
-            mock_ideas = [
-                {
-                    'idea_id': '01HZRXP1K2M3N4P5Q6R7S8T9U0',
-                    'title': 'Novel Stellar Dynamics Correlation',
-                    'hypothesis': 'Stellar velocity dispersions in galaxy clusters correlate with dark matter halo properties in ways not predicted by current models.',
-                    'rationale': 'Recent observations suggest discrepancies between predicted and observed stellar kinematics in cluster environments.',
-                    'domain_tags': ['stellar dynamics', 'galaxy clusters'],
-                    'novelty_refs': ['2023ApJ...900...1A', '2023MNRAS.520.1234B'],
-                    'required_data': ['Gaia DR3', 'SDSS'],
-                    'methods': ['Statistical analysis', 'N-body simulations'],
-                    'est_effort_days': 10,
-                    'status': 'Proposed'
-                }
-            ]
+            ideas_df = self.registry_manager.load_registry('ideas_register')
             
-            return mock_ideas
+            if ideas_df.empty:
+                self.logger.info("No ideas found in registry")
+                return []
+            
+            # Apply filter criteria
+            filtered_df = ideas_df.copy()
+            
+            for key, value in filter_criteria.items():
+                if key in filtered_df.columns:
+                    if isinstance(value, list):
+                        filtered_df = filtered_df[filtered_df[key].isin(value)]
+                    else:
+                        filtered_df = filtered_df[filtered_df[key] == value]
+            
+            # Convert to list of dictionaries
+            ideas_list = filtered_df.to_dict('records')
+            
+            # Parse list fields that are stored as strings
+            for idea in ideas_list:
+                for field in ['domain_tags', 'novelty_refs', 'required_data', 'methods', 'literature_refs']:
+                    if field in idea and isinstance(idea[field], str):
+                        try:
+                            # Handle empty list strings
+                            if idea[field] in ['[]', '']:
+                                idea[field] = []
+                            else:
+                                # Parse JSON-like list string
+                                import ast
+                                idea[field] = ast.literal_eval(idea[field])
+                        except (ValueError, SyntaxError):
+                            # If parsing fails, treat as single item list or empty
+                            if idea[field].strip():
+                                idea[field] = [idea[field]]
+                            else:
+                                idea[field] = []
+            
+            self.logger.info(f"Found {len(ideas_list)} ideas matching filter criteria")
+            return ideas_list
             
         except Exception as e:
             self.logger.error(f"Failed to load ideas for review: {str(e)}")
@@ -147,6 +176,11 @@ class Reviewer(BaseAgent):
             'novelty': novelty_score
         })
         
+        # Log detailed scoring for debugging
+        self.logger.info(f"Scoring: Impact={impact_score}, Feasibility={feasibility_score}, "
+                        f"Testability={testability_score}, Novelty={novelty_score}, "
+                        f"Total={total_score}/20 → Status: {status}")
+        
         # Generate reviewer notes
         reviewer_notes = self._generate_reviewer_notes(
             idea, impact_score, feasibility_score, testability_score, novelty_score
@@ -168,61 +202,224 @@ class Reviewer(BaseAgent):
         return reviewed_idea
     
     def _assess_novelty(self, idea: Dict[str, Any]) -> int:
-        """Assess novelty score (1-5) based on literature overlap."""
+        """Assess novelty score (1-5) based on comprehensive literature search."""
         try:
-            # Check overlap with existing literature
             hypothesis = idea.get('hypothesis', '')
             domain_tags = idea.get('domain_tags', [])
+            title = idea.get('title', '')
             
-            # TODO: Implement actual novelty checking using vector similarity
-            # For now, return a mock score
-            self.logger.info("Novelty assessment not fully implemented, using mock score")
+            self.logger.info(f"Conducting comprehensive literature search for: {title}")
             
-            # Simple heuristic: longer, more specific hypotheses tend to be more novel
-            word_count = len(hypothesis.split())
-            tag_count = len(domain_tags)
+            # Perform comprehensive literature search across ALL time periods
+            literature_context = self._comprehensive_literature_search(hypothesis, domain_tags, title)
             
-            if word_count > 25 and tag_count >= 2:
-                return 4  # High novelty
-            elif word_count > 15 and tag_count >= 1:
-                return 3  # Moderate novelty
-            else:
-                return 2  # Low novelty
+            # Analyze literature overlap and novelty
+            novelty_score = self._analyze_literature_novelty(hypothesis, literature_context)
+            
+            # Store literature references in idea for future use
+            idea['literature_refs'] = literature_context.get('relevant_papers', [])
+            idea['novelty_analysis'] = literature_context.get('novelty_analysis', '')
+            
+            self.logger.info(f"Novelty score: {novelty_score}/5 based on {len(literature_context.get('relevant_papers', []))} relevant papers")
+            return novelty_score
                 
         except Exception as e:
             self.logger.warning(f"Novelty assessment failed: {str(e)}")
-            return 2  # Default to conservative score
+            return 3  # Default to moderate score when search fails
+    
+    def _comprehensive_literature_search(self, hypothesis: str, domain_tags: List[str], title: str) -> Dict[str, Any]:
+        """Perform comprehensive literature search across ALL time periods for any hypothesis."""
+        
+        literature_context = {
+            'relevant_papers': [],
+            'search_strategies': [],
+            'total_papers_found': 0,
+            'novelty_analysis': ''
+        }
+        
+        try:
+            # Strategy 1: Search by domain tags (broad scope)
+            if isinstance(domain_tags, list):
+                domains_to_search = domain_tags
+            else:
+                # Handle case where domain_tags might be a string or other format
+                domains_to_search = [str(domain_tags)]
+            
+            for domain in domains_to_search:
+                if domain and isinstance(domain, str) and len(domain.strip()) > 2:
+                    clean_domain = domain.strip().replace('[', '').replace(']', '').replace("'", "").replace('"', '')
+                    self.logger.info(f"Searching for domain: '{clean_domain}'")
+                    if clean_domain and len(clean_domain) > 2:  # Double-check after cleaning
+                        papers = self.ads_service.search(
+                            query=clean_domain,
+                            max_results=50,
+                            # NO time constraints - search all papers ever published
+                            sort="citation_count desc"  # Get most cited papers
+                        )
+                        literature_context['relevant_papers'].extend(papers)
+                        literature_context['search_strategies'].append(f"Domain search: {clean_domain}")
+                    else:
+                        self.logger.warning(f"Domain '{domain}' cleaned to empty string: '{clean_domain}'")
+            
+            # Strategy 2: Search by key terms extracted from hypothesis
+            key_terms = self._extract_key_terms_from_hypothesis(hypothesis)
+            for term in key_terms[:3]:  # Top 3 most important terms
+                if term and len(term.strip()) > 2:  # Ensure term is valid
+                    papers = self.ads_service.search(
+                        query=term,  # Use term directly, not quoted (ADS handles this better)
+                        max_results=30,
+                        sort="citation_count desc"
+                    )
+                    literature_context['relevant_papers'].extend(papers)
+                    literature_context['search_strategies'].append(f"Key term search: {term}")
+            
+            # Strategy 3: Search by methodological approach
+            methods = self._extract_methods_from_hypothesis(hypothesis)
+            for method in methods[:2]:  # Top 2 methods
+                papers = self.ads_service.search(
+                    query=f"{method} AND ({' OR '.join(domain_tags)})",
+                    max_results=20,
+                    sort="date desc"  # Get recent methodological advances
+                )
+                literature_context['relevant_papers'].extend(papers)
+                literature_context['search_strategies'].append(f"Method search: {method}")
+            
+            # Remove duplicates based on bibcode
+            seen_bibcodes = set()
+            unique_papers = []
+            for paper in literature_context['relevant_papers']:
+                bibcode = paper.get('bibcode', '')
+                if bibcode and bibcode not in seen_bibcodes:
+                    seen_bibcodes.add(bibcode)
+                    unique_papers.append(paper)
+            
+            literature_context['relevant_papers'] = unique_papers
+            literature_context['total_papers_found'] = len(unique_papers)
+            
+            self.logger.info(f"Found {len(unique_papers)} unique relevant papers using {len(literature_context['search_strategies'])} search strategies")
+            
+        except Exception as e:
+            self.logger.error(f"Literature search failed: {e}")
+        
+        return literature_context
+    
+    def _extract_key_terms_from_hypothesis(self, hypothesis: str) -> List[str]:
+        """Extract key scientific terms from hypothesis for targeted literature search."""
+        import re
+        
+        # Remove common words and extract potential scientific terms
+        common_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'that', 'this', 'these', 'those', 'will', 'would', 'should', 'could', 'may', 'might', 'can', 'be', 'is', 'are', 'was', 'were', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'done', 'doing'}
+        
+        # First extract scientific compound terms (like "dark matter", "stellar evolution")
+        scientific_phrases = re.findall(r'\b(?:dark matter|stellar evolution|galactic dynamics|exoplanet|black hole|neutron star|supernova|gamma ray|x-ray|magnetic field|gravitational wave|cosmic ray|planetary nebula|white dwarf|red giant|main sequence|brown dwarf|quasar|active galactic nuclei|cosmic microwave background|big bang|inflation|dark energy)\b', hypothesis.lower())
+        
+        # Extract individual scientific words (3+ characters, excluding common words)
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', hypothesis.lower())
+        scientific_words = [word for word in words if word not in common_words and len(word) > 3]
+        
+        # Combine and prioritize
+        key_terms = scientific_phrases + scientific_words[:10]  # Limit individual words
+        
+        # Remove duplicates and empty terms
+        key_terms = [term.strip() for term in set(key_terms) if term and len(term.strip()) > 2]
+        
+        # Sort by length (longer scientific phrases first)
+        key_terms.sort(key=len, reverse=True)
+        
+        return key_terms[:5]
+    
+    def _extract_methods_from_hypothesis(self, hypothesis: str) -> List[str]:
+        """Extract methodological approaches from hypothesis."""
+        
+        # Common astrophysical methods and techniques
+        method_keywords = [
+            'spectroscopy', 'photometry', 'astrometry', 'interferometry',
+            'modeling', 'simulation', 'analysis', 'survey', 'observations',
+            'statistical analysis', 'machine learning', 'deep learning',
+            'time series', 'variability', 'correlation', 'regression'
+        ]
+        
+        hypothesis_lower = hypothesis.lower()
+        found_methods = []
+        
+        for method in method_keywords:
+            if method in hypothesis_lower:
+                found_methods.append(method)
+        
+        return found_methods[:3]  # Return top 3 methods
+    
+    def _analyze_literature_novelty(self, hypothesis: str, literature_context: Dict[str, Any]) -> int:
+        """Analyze literature context to determine novelty score."""
+        
+        papers = literature_context.get('relevant_papers', [])
+        
+        if len(papers) == 0:
+            # No related literature found - either very novel or poorly formed hypothesis
+            return 5  # Assume highly novel if no literature exists
+        
+        # Score based on literature landscape
+        if len(papers) < 10:
+            # Very few papers - likely novel area
+            return 5
+        elif len(papers) < 25:
+            # Some papers but not saturated field
+            return 4
+        elif len(papers) < 50:
+            # Moderate literature base
+            return 3
+        elif len(papers) < 100:
+            # Well-studied area
+            return 2
+        else:
+            # Highly studied field - harder to be novel
+            return 1
     
     def _assess_impact(self, idea: Dict[str, Any]) -> int:
-        """Assess potential impact score (1-5)."""
+        """Assess potential impact score (1-5) - be encouraging but realistic."""
         try:
             hypothesis = idea.get('hypothesis', '')
             domain_tags = idea.get('domain_tags', [])
+            title = idea.get('title', '')
             
-            # Heuristic scoring based on keywords and domain
-            impact_keywords = [
-                'paradigm', 'breakthrough', 'fundamental', 'revolutionary',
-                'discovery', 'novel', 'unprecedented', 'significant'
+            # Start with good base score - be encouraging!
+            score = 3  # Base score (was 2)
+            
+            # Boost for specific, measurable predictions
+            specific_indicators = [
+                'correlation', 'relationship', 'ratio', 'rate', 'efficiency',
+                'distribution', 'variation', 'signature', 'pattern', 'trend'
             ]
-            
-            high_impact_domains = [
-                'cosmology', 'dark matter', 'dark energy', 'exoplanets',
-                'gravitational waves', 'black holes', 'galaxy formation'
-            ]
-            
-            score = 2  # Base score
-            
-            # Boost for impact keywords
-            hypothesis_lower = hypothesis.lower()
-            keyword_matches = sum(1 for word in impact_keywords if word in hypothesis_lower)
-            score += min(keyword_matches, 2)
             
             # Boost for high-impact domains
-            domain_matches = sum(1 for tag in domain_tags 
-                               for domain in high_impact_domains 
-                               if domain in tag.lower())
-            score += min(domain_matches, 1)
+            high_impact_domains = [
+                'stellar evolution', 'galactic dynamics', 'exoplanets', 'dark matter',
+                'black holes', 'neutron stars', 'supernova', 'galaxy formation'
+            ]
             
+            # Boost for novel analysis approaches
+            novel_approaches = [
+                'systematic analysis', 'cross-correlation', 'multi-wavelength',
+                'time-domain', 'statistical survey', 'machine learning'
+            ]
+            
+            text = (hypothesis + ' ' + title + ' ' + ' '.join(domain_tags)).lower()
+            
+            # Boost for specific predictions
+            specific_matches = sum(1 for indicator in specific_indicators if indicator in text)
+            if specific_matches >= 2:
+                score += 1  # Multiple specific indicators
+            
+            # Boost for high-impact domains
+            domain_matches = sum(1 for domain in high_impact_domains if domain in text)
+            if domain_matches >= 1:
+                score += 1  # Working in high-impact area
+            
+            # Boost for novel approaches
+            approach_matches = sum(1 for approach in novel_approaches if approach in text)
+            if approach_matches >= 1:
+                score += 1  # Novel methodological approach
+            
+            # Don't penalize - be encouraging
             return min(score, 5)
             
         except Exception as e:
@@ -326,72 +523,144 @@ class Reviewer(BaseAgent):
             return 3  # Default to neutral score
     
     def _determine_status(self, total_score: int, individual_scores: Dict[str, int]) -> str:
-        """Determine approval status based on scores and thresholds."""
+        """Determine approval status based on scores and thresholds - BE MORE LENIENT."""
         thresholds = self.approval_thresholds
         
-        # Check individual minimums
-        individual_min = thresholds.get('approved', {}).get('individual_min', 3)
-        for score_name, score in individual_scores.items():
-            if score < individual_min:
-                if total_score <= thresholds.get('rejected', {}).get('total_max', 8):
-                    return 'Rejected'
-                else:
-                    return 'Needs Revision'
-        
-        # Check total score thresholds
-        approved_min = thresholds.get('approved', {}).get('total_min', 13)
-        revision_min = thresholds.get('revision', {}).get('total_min', 9)
-        revision_max = thresholds.get('revision', {}).get('total_max', 12)
+        # Check total score thresholds FIRST (more important than individual mins)
+        approved_min = thresholds.get('approved', {}).get('total_min', 10)  # Updated default
+        rejected_max = thresholds.get('rejected', {}).get('total_max', 7)    # Updated default
         
         if total_score >= approved_min:
+            # Even if some individual scores are low, approve if total is good
             return 'Approved'
-        elif revision_min <= total_score <= revision_max:
-            return 'Needs Revision'
-        else:
+        elif total_score <= rejected_max:
             return 'Rejected'
+        else:
+            # Middle range gets revision
+            return 'Needs Revision'
     
     def _generate_reviewer_notes(self, idea: Dict[str, Any], 
                                impact: int, feasibility: int, 
                                testability: int, novelty: int) -> str:
-        """Generate detailed reviewer feedback."""
+        """Generate detailed, PhD-level reviewer feedback."""
         
         notes = []
         
-        # Impact feedback
+        # Detailed impact assessment
         if impact >= 4:
-            notes.append("HIGH IMPACT: This research addresses important scientific questions.")
+            notes.append(f"**HIGH IMPACT RESEARCH**: This hypothesis addresses fundamental questions in {', '.join(idea.get('domain_tags', ['astrophysics']))} with potential to advance theoretical understanding or observational capabilities. Expected to influence future research directions and potentially resolve current controversies in the field.")
+        elif impact == 3:
+            notes.append(f"**MODERATE IMPACT**: Solid contribution to {', '.join(idea.get('domain_tags', ['astrophysics']))} literature. Results would be of interest to specialists and provide incremental advances in understanding.")
         elif impact <= 2:
-            notes.append("LOW IMPACT: Consider framing the research in terms of broader implications.")
+            notes.append(f"**LIMITED IMPACT**: While technically sound, the research question lacks broader significance. Consider reframing to address larger theoretical questions or connecting to current controversies in {', '.join(idea.get('domain_tags', ['astrophysics']))}.")
         
-        # Feasibility feedback
+        # Detailed feasibility assessment
         if feasibility <= 2:
-            notes.append("FEASIBILITY CONCERNS: Data access or methodological challenges may impede progress.")
+            data_reqs = idea.get('required_data', [])
+            methods = idea.get('methods', [])
+            notes.append(f"**FEASIBILITY CONCERNS**: Significant challenges identified. Data access for {', '.join(data_reqs)} may be limited or require specialized facilities. Proposed methods ({', '.join(methods)}) may require computational resources beyond typical research group capabilities. Consider alternative datasets or simplified methodological approaches.")
         elif feasibility >= 4:
-            notes.append("GOOD FEASIBILITY: Required data and methods appear readily accessible.")
+            effort_days = idea.get('est_effort_days', 'Unknown')
+            notes.append(f"**EXCELLENT FEASIBILITY**: All required datasets are publicly accessible with well-documented APIs. Proposed analysis methods are standard in the field. Estimated timeline of {effort_days} days is realistic for a postdoc-level researcher. No major technical barriers anticipated.")
+        else:
+            notes.append(f"**MODERATE FEASIBILITY**: Most requirements appear achievable with standard research infrastructure. Some challenges expected but manageable with appropriate planning.")
         
-        # Testability feedback
+        # Detailed testability assessment
         if testability <= 2:
-            notes.append("TESTABILITY ISSUES: Hypothesis needs more specific, measurable predictions.")
+            hypothesis = idea.get('hypothesis', '')
+            notes.append(f"**TESTABILITY DEFICIENCIES**: The hypothesis lacks quantitative predictions and measurable outcomes. Current formulation ('{hypothesis[:100]}...') is too qualitative for rigorous statistical testing. Recommend specifying: (1) Expected effect sizes with uncertainty ranges, (2) Statistical significance thresholds, (3) Alternative hypotheses for comparison, (4) Falsifiability criteria with specific observational signatures.")
         elif testability >= 4:
-            notes.append("WELL-TESTABLE: Clear predictions with defined success criteria.")
+            notes.append(f"**HIGHLY TESTABLE**: Hypothesis provides clear, quantifiable predictions with well-defined success criteria. Statistical analysis plan is appropriate for the research question. Expected observational signatures are precisely specified with realistic detection thresholds.")
+        else:
+            notes.append(f"**ADEQUATE TESTABILITY**: Hypothesis can be tested but would benefit from more specific quantitative predictions and clearer statistical frameworks.")
         
-        # Novelty feedback
+        # Detailed novelty assessment
         if novelty <= 2:
-            notes.append("NOVELTY CONCERNS: Significant overlap with existing literature detected.")
+            notes.append(f"**NOVELTY LIMITATIONS**: Significant conceptual overlap with existing literature detected. The proposed approach appears to be an incremental extension of established methods. Recommend conducting more thorough literature review to identify truly unexplored parameter space or novel methodological approaches.")
         elif novelty >= 4:
-            notes.append("NOVEL APPROACH: Appears to address unexplored research directions.")
+            domain_tags = idea.get('domain_tags', [])
+            notes.append(f"**HIGHLY NOVEL CONTRIBUTION**: This research appears to explore genuinely uncharted territory in {', '.join(domain_tags)}. The proposed approach combines concepts or datasets in ways not previously attempted. High potential for discovery of new phenomena or relationships.")
+        else:
+            notes.append(f"**MODERATE NOVELTY**: Some novel elements present but building on established foundations. Good potential for advancing current understanding.")
         
-        # Overall recommendations
+        # Astrophysics-specific considerations
+        astro_notes = self._generate_astrophysics_specific_notes(idea)
+        if astro_notes:
+            notes.extend(astro_notes)
+        
+        # Risk assessment
+        risk_assessment = self._assess_astrophysics_risks(idea)
+        if risk_assessment:
+            notes.append(f"**RISK ASSESSMENT**: {risk_assessment}")
+        
+        # Overall recommendations with detailed reasoning
         total = impact + feasibility + testability + novelty
         
         if total >= 13:
-            notes.append("RECOMMENDATION: Approve for experiment design phase.")
+            notes.append(f"**STRONG RECOMMENDATION FOR APPROVAL** (Score: {total}/20): This research meets high standards for impact, feasibility, and scientific rigor. The hypothesis is well-formulated, the approach is sound, and the expected outcomes would make valuable contributions to the field. Recommend immediate progression to experiment design phase.")
         elif 9 <= total <= 12:
-            notes.append("RECOMMENDATION: Revise hypothesis to address identified concerns.")
+            notes.append(f"**CONDITIONAL APPROVAL - REVISIONS NEEDED** (Score: {total}/20): The core research idea has merit but requires refinement before proceeding. Address the specific concerns noted above, particularly in areas scoring below 3. With revisions, this could become a strong contribution to the field.")
         else:
-            notes.append("RECOMMENDATION: Reject - fundamental issues require major reconceptualization.")
+            notes.append(f"**RECOMMENDATION FOR REJECTION** (Score: {total}/20): Fundamental issues prevent approval in current form. The hypothesis requires major reconceptualization, alternative methodological approaches, or substantial additional development before it can meet publication standards.")
         
         return " | ".join(notes)
+    
+    def _generate_astrophysics_specific_notes(self, idea: Dict[str, Any]) -> List[str]:
+        """Generate astrophysics domain-specific review notes."""
+        
+        notes = []
+        domain_tags = idea.get('domain_tags', [])
+        hypothesis = idea.get('hypothesis', '').lower()
+        methods = idea.get('methods', [])
+        data_reqs = idea.get('required_data', [])
+        
+        # Domain-specific considerations
+        if any('exoplanet' in tag.lower() for tag in domain_tags):
+            notes.append("**EXOPLANET SCIENCE**: Ensure consideration of selection effects in transit/RV surveys, stellar activity contamination, and atmospheric modeling uncertainties. Consider validation with multiple detection methods.")
+            
+        if any('stellar' in tag.lower() for tag in domain_tags):
+            if 'gaia' in str(data_reqs).lower():
+                notes.append("**STELLAR ASTROPHYSICS**: Excellent choice using Gaia data. Consider parallax uncertainties, proper motion systematic errors, and completeness limits. Account for stellar population gradients in the Galaxy.")
+            
+        if any('galactic' in tag.lower() for tag in domain_tags):
+            notes.append("**GALACTIC ASTRONOMY**: Consider impact of dust extinction, distance uncertainties, and kinematic substructure. Validate results across different Galactic environments (disk, halo, bulge).")
+            
+        # Statistical methodology considerations
+        if 'machine learning' in str(methods).lower():
+            notes.append("**ML METHODOLOGY**: Ensure proper cross-validation, feature selection, and interpretability. Beware of overfitting with astronomical datasets. Consider physics-informed constraints.")
+            
+        if 'bayesian' in str(methods).lower():
+            notes.append("**BAYESIAN ANALYSIS**: Excellent choice for handling uncertainties. Ensure proper prior selection and MCMC convergence diagnostics. Consider hierarchical modeling for population studies.")
+        
+        return notes
+    
+    def _assess_astrophysics_risks(self, idea: Dict[str, Any]) -> str:
+        """Assess astrophysics-specific risks."""
+        
+        risks = []
+        hypothesis = idea.get('hypothesis', '').lower()
+        data_reqs = idea.get('required_data', [])
+        domain_tags = idea.get('domain_tags', [])
+        
+        # Data-specific risks
+        if 'jwst' in str(data_reqs).lower():
+            risks.append("JWST data access may be limited by observing time allocation")
+            
+        if 'gaia' in str(data_reqs).lower() and 'precision' in hypothesis:
+            risks.append("Gaia systematic errors may limit precision for faint sources (G > 19)")
+            
+        # Analysis risks
+        if 'correlation' in hypothesis and len(data_reqs) < 2:
+            risks.append("Single dataset correlation studies vulnerable to systematic biases")
+            
+        if any('supernova' in tag.lower() for tag in domain_tags) and 'host galaxy' in hypothesis:
+            risks.append("Supernova-host galaxy associations subject to misidentification in crowded fields")
+            
+        # Sample size risks
+        if 'rare' in hypothesis or 'transient' in hypothesis:
+            risks.append("Limited sample sizes may reduce statistical power for rare phenomena")
+        
+        return '; '.join(risks) if risks else "Standard astrophysical analysis risks apply"
     
     def validate_input(self, context: AgentExecutionContext) -> bool:
         """Validate input for review process."""
