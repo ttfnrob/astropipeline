@@ -7,141 +7,144 @@
 
 ## What is this?
 
-AstroAgent Pipeline is a **goal-driven continuous research system** that uses specialized AI agents to conduct astrophysics research automatically. Unlike traditional tools that require manual intervention at each step, this system runs autonomously until research goals are achieved.
+AstroAgent Pipeline is a **goal-driven continuous research system** that uses specialized AI agents to conduct astrophysics research automatically. It runs autonomously until research goals are achieved, with a live web dashboard for monitoring and control.
 
 **Key features:**
-- 🎯 **Goal-driven execution** - auto-pauses when research targets are completed
-- 🔄 **Continuous pipeline** - ideas flow through all stages without manual intervention
-- 🤖 **Smart AI agents** - specialized for each research step
-- 📚 **Literature integration** - real-time novelty checking against current papers  
-- 🌐 **Real-time web dashboard** - monitor progress and control pipeline
-- 📊 **Complete research audit trail** - track every decision and result
+- 🎯 **Goal-driven execution** – auto-pauses when research targets are completed
+- 🔄 **Continuous pipeline** – ideas flow through all stages without manual intervention
+- 🤖 **Specialized AI agents** – tailored to each research step
+- 📚 **Literature integration** – novelty checks against current papers
+- 🌐 **Real-time web dashboard** – monitor and control the pipeline
+- 📊 **Complete audit trail** – track every decision and result
 
 ## 🚀 Quick Start (2 minutes)
 
 ```bash
-# 1. Clone and setup
-git clone https://github.com/yourusername/astropipeline.git
-cd astropipeline
+# 1) Clone and install
+git clone https://github.com/yourusername/astroagent.git
+cd astroagent
 pip install -r requirements.txt
 
-# 2. Get free API keys and add to .env file
-# ADS token: https://ui.adsabs.harvard.edu/user/settings/token
-# OpenAI key: https://platform.openai.com/api-keys
-echo "ADS_API_TOKEN=your_ads_token_here" > .env
-echo "OPENAI_API_KEY=your_openai_key_here" >> .env
+# 2) Create a .env (template provided) and add keys
+cp environment_template.txt .env
+# Required: ADS_API_TOKEN, OPENAI_API_KEY
+# Optional: ANTHROPIC_API_KEY, NASA_API_KEY, etc.
 
-# 3. Start the autonomous research system!
+# 3) Start the autonomous research system (pipeline + web UI)
 python start.py --domains "exoplanets,atmospheres"
 ```
 
-**That's it!** 
-
-- The system starts generating hypotheses, reviewing them, designing experiments, and executing research
-- A web dashboard opens at `http://localhost:8000` to monitor real-time progress  
-- The pipeline automatically **pauses when the first idea completes the full research workflow**
-- Click any idea in the dashboard for detailed information
-- Use the **Pause/Resume** button to control execution
-
-**🎯 Goal-driven approach:** Instead of generating many disconnected ideas, the system focuses on advancing good ideas through the complete research pipeline until achievement criteria are met.
+Notes:
+- On first run, the system will create data directories automatically.
+- The web dashboard is served at `http://localhost:8000`.
+- By default, the pipeline **auto-pauses after the first completed idea** (configurable).
 
 ## How it works
 
 The system runs a **continuous multi-agent research pipeline**:
 
 ### 🔄 Continuous Pipeline Flow
-1. **Smart Hypothesis Generation** - Creates ideas only when pipeline needs more work (avoids hypothesis overload)
-2. **Automatic Review** - AI evaluates ideas for novelty, feasibility, and impact using current literature
-3. **Experiment Design** - Approved ideas get detailed research protocols automatically  
-4. **Execution Simulation** - Research plans are validated and marked ready for implementation
-5. **Completion Tracking** - Finished work is archived and counted toward goals
+1. **Hypothesis Generation** – Creates ideas only when the pipeline needs more work
+2. **Automatic Review** – Evaluates novelty, feasibility, and impact using literature
+3. **Experiment Design** – Produces detailed protocols for approved ideas  
+4. **Execution Simulation** – Validates research plans and marks them ready
+5. **Completion Tracking** – Archives finished work and updates metrics
 
 ### 🎯 Goal-Driven Execution
-- **Default behavior**: Auto-pause after **1 completed idea** (configurable)
-- **Smart resource management**: Only generates new hypotheses when pipeline needs more active work  
-- **Focus on quality**: Advances promising ideas through all stages before creating new ones
-- **Achievement-based stopping**: Stops when research goals are met, not arbitrary time limits
+- Default: auto-pause after **1 completed idea**
+- Generates new hypotheses only when needed
+- Focuses resources on advancing promising ideas end-to-end
 
 ### 🌐 Real-Time Dashboard
-- Monitor all ideas progressing through pipeline stages
-- See agent activity with live status indicators  
-- Pause/Resume/Stop controls for pipeline management
-- Sortable, filterable tables with detailed idea information
-- Click any idea for comprehensive details modal
+- Live status of agents and pipeline stages
+- Pause/Resume/Stop controls
+- Sortable/filterable tables and detailed idea views
 
-## What you can do right now
-
-- ✅ **Autonomous research execution** - Full pipeline from idea to completion without manual intervention
-- ✅ **Real-time monitoring** - Web dashboard shows live progress and agent activity
-- ✅ **Goal-driven operation** - Automatically pauses when research targets achieved  
-- ✅ **Smart idea management** - Only generates new hypotheses when pipeline needs more work
-- ✅ **Interactive control** - Pause/Resume/Stop pipeline via web interface
-- ✅ **Detailed idea exploration** - Click any idea for comprehensive information
-- 🚧 **Actual experiment execution** - Currently simulated, real data analysis coming soon
-
-## Usage Examples
+## Usage
 
 ```bash
-# Default: Run continuous pipeline + web dashboard (auto-pause after 1 completed idea)
+# Default: run pipeline + web UI together (auto-pauses after 1 completed idea)
 python start.py
 
-# Run until 3 ideas are completed, then auto-pause
+# Run until 3 ideas are completed (then auto-pause)
 python start.py --complete-ideas 3
 
 # Focus on specific research areas
 python start.py --domains "stellar evolution,supernovae"
 
-# Web dashboard only (useful if pipeline already running elsewhere)
+# Web UI only / Pipeline only
 python start.py web
-
-# Pipeline only (no web interface)  
 python start.py pipeline
 
-# Traditional discrete mode (generate ideas once, then stop)
+# Discrete mode (generate once and stop)
 python start.py pipeline --mode discrete --count 5
+
+# Time-limit safeguard (continuous mode)
+python start.py pipeline --complete-ideas 3 --max-time 60
+
+# Demo and quick test
+python start.py demo
+python start.py test
+
+# Reset data/projects (with confirmation)
+python start.py clean
+python start.py --fresh --force pipeline
 ```
 
-### Web Dashboard Features
-- **Real-time progress tracking** - Watch ideas advance through pipeline stages
-- **Agent status monitoring** - See which agents are active with visual indicators
-- **Pipeline controls** - Pause, Resume, or Stop execution
-- **Interactive tables** - Sort and filter ideas by status, score, domain  
-- **Detailed idea modals** - Click any row for full hypothesis, rationale, and research details
+CLI flags (subset):
+- `--domains` comma-separated research domains
+- `--mode` `continuous` (default) or `discrete`
+- `--count` number of hypotheses for generation (default: 3)
+- `--complete-ideas` target number to complete (default: 1)
+- `--max-time` runtime limit in minutes
+- `--fresh` reset registries and project folders; use `--force` to skip prompt
+- `--skip-checks` skip env/dependency checks
 
-## Requirements
-
-- **Python 3.9+**
-- **Free ADS API token** (for literature search) - [Get yours here](https://ui.adsabs.harvard.edu/user/settings/token)
-- **OpenAI API key** (for AI agents) - [Get yours here](https://platform.openai.com/api-keys)
-
-## Advanced Configuration
+## Makefile shortcuts
 
 ```bash
-# Run with custom completion targets and time limits
-python start.py --complete-ideas 5 --max-time 60  # 5 ideas OR 60 minutes max
+make setup                 # venv + install dev deps
+make test                  # run tests with coverage
+make lint                  # flake8 + mypy
+make format                # black + isort
 
-# Adjust pipeline sensitivity (how many ideas to keep active)
-python start.py --min-pipeline-size 2  # Keep 2-3 active ideas flowing
+# Agent pipeline ops
+make hypotheses TAGS="stellar dynamics" N=10
+make review
+make plan IDEA=01J...
+make execute IDEA=01J...
+make peerreview IDEA=01J...
+make report IDEA=01J...
+```
 
-# Different research domains
-python start.py --domains "galactic dynamics,dark matter,stellar formation"
+## Environment
 
-# Use discrete mode for traditional batch processing
-python start.py pipeline --mode discrete --count 10
+Minimum requirements:
+- **Python 3.9+**
+- **ADS_API_TOKEN** – get from `https://ui.adsabs.harvard.edu/user/settings/token`
+- **OPENAI_API_KEY** – get from `https://platform.openai.com/api-keys`
+
+Optional keys supported (see `environment_template.txt`): `ANTHROPIC_API_KEY`, `NASA_API_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, `MAST_TOKEN`, `SERPAPI_KEY`, `TAVILY_API_KEY`, etc.
+
+## Docker (optional)
+
+```bash
+make docker-build
+make docker-run
 ```
 
 ## Contributing
 
-This is an active research project pushing the boundaries of **autonomous AI research systems**! We welcome:
+This is an active research project pushing the boundaries of **autonomous AI research systems**. We welcome:
 - 🐛 Bug reports and feature requests
 - 🤖 New agent implementations  
-- 📊 Integration with real astronomical data sources
+- 📊 Integrations with real astronomical data sources
 - 🔬 Novel research pipeline strategies
 - 📚 Documentation improvements
 
 ## License
 
-MIT License - feel free to use for research or commercial projects.
+MIT License – free for research and commercial use.
 
 ---
 
